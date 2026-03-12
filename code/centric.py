@@ -7,7 +7,6 @@ Description:
         - Dropout and weight decay to mitigate overfitting
         - Early stopping based on validation performance
         - Evaluation metrics (Precision, Recall, NDCG, Accuracy)
-        - Weights & Biases (wandb) integration for logging and monitoring
         - Clean, modular structure with extensive comments
 
     Notes:
@@ -32,7 +31,6 @@ import math
 import time
 import random
 import pickle
-import wandb
 import numpy as np
 import pandas as pd
 import argparse
@@ -101,7 +99,7 @@ class Config:
     # WANDB project information
     WANDB_PROJECT = "RecSys-Dual_Preferences"
     WANDB_PRE_NAME = f"Baseline_{DATASET}_GeneralLLM"
-    WANDB_ENTITY = None  # Set your wandb entity if needed; else None
+    WANDB_ENTITY = None
 
 
 # -------------------
@@ -606,27 +604,6 @@ class EarlyStopping:
 def main(seed):
     cfg = Config()
 
-    # -------------------
-    # Initialize wandb
-    # -------------------
-    wandb_key = "YOUR_WANDB_KEY"
-    wandb.login(key=wandb_key)
-    wandb.init(
-        project=cfg.WANDB_PROJECT,
-        name=f"{cfg.WANDB_PRE_NAME}_Seed_{seed}",
-        entity=cfg.WANDB_ENTITY,
-        config={
-            "batch_size": cfg.BATCH_SIZE,
-            "num_neg_samples": cfg.NUM_NEG_SAMPLES,
-            "lr": cfg.LR,
-            "weight_decay": cfg.WEIGHT_DECAY,
-            "epochs": cfg.EPOCHS,
-            "early_stop_patience": cfg.EARLY_STOP_PATIENCE,
-            "embedding_dim": cfg.EMBEDDING_DIM,
-            "hidden_dim": cfg.HIDDEN_DIM,
-            "dropout": cfg.DROPOUT
-        }
-    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -723,17 +700,6 @@ def main(seed):
               f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f} | "
               f"Val Precision: {val_precision:.4f} | Val Recall: {val_recall:.4f} | Val NDCG: {val_ndcg:.4f}")
 
-        # Log metrics to wandb
-        wandb.log({
-            "epoch": epoch + 1,
-            "train_loss": train_loss,
-            "train_acc": train_acc,
-            "val_loss": val_loss,
-            "val_acc": val_acc,
-            "val_precision": val_precision,
-            "val_recall": val_recall,
-            "val_ndcg": val_ndcg
-        })
 
         # Early stopping check
         early_stopper(val_loss, model)
@@ -770,14 +736,6 @@ def main(seed):
     print(f"Test Results -> Loss: {test_loss:.4f}, Accuracy: {test_acc:.4f}, "
           f"Precision: {test_precision:.4f}, Recall: {test_recall:.4f}, NDCG: {test_ndcg:.4f}")
 
-    wandb.log({
-        "test_loss": test_loss,
-        "test_acc": test_acc,
-        "test_precision": test_precision,
-        "test_recall": test_recall,
-        "test_ndcg": test_ndcg
-    })
-
     # -------------------
     # Ranking-Based Testing
     # -------------------
@@ -804,15 +762,8 @@ def main(seed):
               f"Recall: {ranking_results[k]['recall']:.4f}, "
               f"NDCG: {ranking_results[k]['ndcg']:.4f}")
 
-    # Optionally, log these to wandb as well:
     for k in top_k_list:
-        wandb.log({
-            f"precision@{k}": ranking_results[k]['precision'],
-            f"recall@{k}": ranking_results[k]['recall'],
-            f"ndcg@{k}": ranking_results[k]['ndcg']
-        })
 
-    wandb.finish()
 
     print("Done.")
 
