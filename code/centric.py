@@ -762,9 +762,6 @@ def main(seed):
               f"Recall: {ranking_results[k]['recall']:.4f}, "
               f"NDCG: {ranking_results[k]['ndcg']:.4f}")
 
-    for k in top_k_list:
-
-
     print("Done.")
 
 
