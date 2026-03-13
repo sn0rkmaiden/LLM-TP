@@ -64,19 +64,19 @@ def set_seed(seed):
 # -------------------
 class Config:
     # Data paths
-    # ITEM_EMBEDDINGS_PATH = f"../datasets/{DATASET}/bert_item_features_10K.pkl"
-    # USER_EMBEDDINGS_PATH = f"../datasets/{DATASET}/bert_general_user_profiles_train.pkl"
+    # ITEM_EMBEDDINGS_PATH = f"../data/{DATASET}/bert_item_features_10K.pkl"
+    # USER_EMBEDDINGS_PATH = f"../data/{DATASET}/bert_general_user_profiles_train.pkl"
     #
-    # TRAIN_PATH = f"../datasets/{DATASET}/train_sample10K.csv"
-    # VAL_PATH = f"../datasets/{DATASET}/validation_sample10K.csv"
-    # TEST_PATH = f"../datasets/{DATASET}/test_sample10K.csv"
+    # TRAIN_PATH = f"../data/{DATASET}/train_sample10K.csv"
+    # VAL_PATH = f"../data/{DATASET}/validation_sample10K.csv"
+    # TEST_PATH = f"../data/{DATASET}/test_sample10K.csv"
 
-    ITEM_EMBEDDINGS_PATH = f"../datasets/{DATASET}/bert_item_features.pkl"
-    USER_EMBEDDINGS_PATH = f"../datasets/{DATASET}/bert_general_user_profiles_train.pkl"
+    ITEM_EMBEDDINGS_PATH = f"../data/{DATASET}/bert_item_features.pkl"
+    USER_EMBEDDINGS_PATH = f"../data/{DATASET}/bert_general_user_profiles_train.pkl"
 
-    TRAIN_PATH = f"../datasets/{DATASET}/train.csv"
-    VAL_PATH = f"../datasets/{DATASET}/validation.csv"
-    TEST_PATH = f"../datasets/{DATASET}/test.csv"
+    TRAIN_PATH = f"../data/{DATASET}/train.csv"
+    VAL_PATH = f"../data/{DATASET}/validation.csv"
+    TEST_PATH = f"../data/{DATASET}/test.csv"
 
 
     # Training hyperparameters
