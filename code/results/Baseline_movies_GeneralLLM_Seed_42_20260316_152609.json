@@ -1,0 +1,37 @@
+{
+  "run_name": "Baseline_movies_GeneralLLM_Seed_42",
+  "timestamp": "20260316_152609",
+  "dataset": "movies",
+  "seed": 42,
+  "config": {
+    "batch_size": 2048,
+    "num_neg_samples": 5,
+    "lr": 0.001,
+    "weight_decay": 1e-05,
+    "epochs": 100,
+    "early_stop_patience": 5,
+    "embedding_dim": 384,
+    "hidden_dim": 128,
+    "dropout": 0.2
+  },
+  "test_metrics": {
+    "loss": 0.41184352473779157,
+    "accuracy": 0.8378413466431748,
+    "precision": 0.5703396557886817,
+    "recall": 0.10528895276754789,
+    "ndcg": 0.5703396557886817
+  },
+  "ranking_results": {
+    "10": {
+      "precision": 0.004810000000000038,
+      "recall": 0.012679147381398494,
+      "ndcg": 0.02212686789377856
+    },
+    "20": {
+      "precision": 0.003924999999999998,
+      "recall": 0.02078998339226904,
+      "ndcg": 0.028679769032187146
+    }
+  },
+  "execution_time_sec": 5185.173150777817
+}
