@@ -31,10 +31,12 @@ import math
 import time
 import random
 import pickle
+import json
 import numpy as np
 import pandas as pd
 import argparse
 from datetime import datetime
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -42,7 +44,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
 
-DATASET = 'games'
+DATASET = 'movies'
 
 # -------------------
 # Set seeds
@@ -116,6 +118,70 @@ def load_interactions_csv(path):
     """Load interaction data from CSV."""
     df = pd.read_csv(path)
     return df
+
+
+def save_run_results(cfg, seed, test_metrics, ranking_results, execution_time=None):
+    results_dir = Path(__file__).resolve().parent / "results"
+    results_dir.mkdir(exist_ok=True)
+
+    base_name = getattr(cfg, "WANDB_PRE_NAME", Path(__file__).stem)
+    run_name = f"{base_name}_Seed_{seed}"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    payload = {
+        "run_name": run_name,
+        "timestamp": timestamp,
+        "dataset": DATASET,
+        "seed": seed,
+        "config": {
+            "batch_size": cfg.BATCH_SIZE,
+            "num_neg_samples": cfg.NUM_NEG_SAMPLES,
+            "lr": cfg.LR,
+            "weight_decay": cfg.WEIGHT_DECAY,
+            "epochs": cfg.EPOCHS,
+            "early_stop_patience": cfg.EARLY_STOP_PATIENCE,
+            "embedding_dim": cfg.EMBEDDING_DIM,
+            "hidden_dim": cfg.HIDDEN_DIM,
+            "dropout": cfg.DROPOUT,
+        },
+        "test_metrics": test_metrics,
+        "ranking_results": {str(k): v for k, v in ranking_results.items()},
+        "execution_time_sec": execution_time,
+    }
+
+    json_path = results_dir / f"{run_name}_{timestamp}.json"
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+    summary_row = {
+        "timestamp": timestamp,
+        "run_name": run_name,
+        "dataset": DATASET,
+        "seed": seed,
+        "test_loss": test_metrics["loss"],
+        "test_accuracy": test_metrics["accuracy"],
+        "test_precision": test_metrics["precision"],
+        "test_recall": test_metrics["recall"],
+        "test_ndcg": test_metrics["ndcg"],
+        "precision@10": ranking_results.get(10, {}).get("precision"),
+        "recall@10": ranking_results.get(10, {}).get("recall"),
+        "ndcg@10": ranking_results.get(10, {}).get("ndcg"),
+        "precision@20": ranking_results.get(20, {}).get("precision"),
+        "recall@20": ranking_results.get(20, {}).get("recall"),
+        "ndcg@20": ranking_results.get(20, {}).get("ndcg"),
+        "execution_time_sec": execution_time,
+    }
+
+    csv_path = results_dir / "results_summary.csv"
+    summary_df = pd.DataFrame([summary_row])
+
+    if csv_path.exists():
+        summary_df.to_csv(csv_path, mode="a", header=False, index=False)
+    else:
+        summary_df.to_csv(csv_path, index=False)
+
+    print(f"Saved detailed results to {json_path}")
+    print(f"Updated summary table at {csv_path}")
 
 
 def negative_sampling(positive_item_ids, all_item_ids, num_neg_samples):
@@ -603,6 +669,7 @@ class EarlyStopping:
 # -------------------
 def main(seed):
     cfg = Config()
+    run_start_time = time.time()
 
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -761,6 +828,21 @@ def main(seed):
               f"Precision: {ranking_results[k]['precision']:.4f}, "
               f"Recall: {ranking_results[k]['recall']:.4f}, "
               f"NDCG: {ranking_results[k]['ndcg']:.4f}")
+
+    test_metrics = {
+        "loss": test_loss,
+        "accuracy": test_acc,
+        "precision": test_precision,
+        "recall": test_recall,
+        "ndcg": test_ndcg,
+    }
+    save_run_results(
+        cfg=cfg,
+        seed=seed,
+        test_metrics=test_metrics,
+        ranking_results=ranking_results,
+        execution_time=time.time() - run_start_time,
+    )
 
     print("Done.")
 

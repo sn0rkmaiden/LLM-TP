@@ -11,18 +11,19 @@ import math
 import time
 import random
 import pickle
-import wandb
+import json
 import numpy as np
 import pandas as pd
 import argparse
 from datetime import datetime
+from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
-DATASET = 'games'
+DATASET = 'movies'
 
 # -------------------
 # Set seeds
@@ -90,6 +91,70 @@ def load_interactions_csv(path):
     """Load interaction data from CSV."""
     df = pd.read_csv(path)
     return df
+
+
+def save_run_results(cfg, seed, test_metrics, ranking_results, execution_time=None):
+    results_dir = Path(__file__).resolve().parent / "results"
+    results_dir.mkdir(exist_ok=True)
+
+    base_name = getattr(cfg, "WANDB_PRE_NAME", Path(__file__).stem)
+    run_name = f"{base_name}_Seed_{seed}"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    payload = {
+        "run_name": run_name,
+        "timestamp": timestamp,
+        "dataset": DATASET,
+        "seed": seed,
+        "config": {
+            "batch_size": cfg.BATCH_SIZE,
+            "num_neg_samples": cfg.NUM_NEG_SAMPLES,
+            "lr": cfg.LR,
+            "weight_decay": cfg.WEIGHT_DECAY,
+            "epochs": cfg.EPOCHS,
+            "early_stop_patience": cfg.EARLY_STOP_PATIENCE,
+            "embedding_dim": cfg.EMBEDDING_DIM,
+            "hidden_dim": cfg.HIDDEN_DIM,
+            "dropout": cfg.DROPOUT,
+        },
+        "test_metrics": test_metrics,
+        "ranking_results": {str(k): v for k, v in ranking_results.items()},
+        "execution_time_sec": execution_time,
+    }
+
+    json_path = results_dir / f"{run_name}_{timestamp}.json"
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+    summary_row = {
+        "timestamp": timestamp,
+        "run_name": run_name,
+        "dataset": DATASET,
+        "seed": seed,
+        "test_loss": test_metrics["loss"],
+        "test_accuracy": test_metrics["accuracy"],
+        "test_precision": test_metrics["precision"],
+        "test_recall": test_metrics["recall"],
+        "test_ndcg": test_metrics["ndcg"],
+        "precision@10": ranking_results.get(10, {}).get("precision"),
+        "recall@10": ranking_results.get(10, {}).get("recall"),
+        "ndcg@10": ranking_results.get(10, {}).get("ndcg"),
+        "precision@20": ranking_results.get(20, {}).get("precision"),
+        "recall@20": ranking_results.get(20, {}).get("recall"),
+        "ndcg@20": ranking_results.get(20, {}).get("ndcg"),
+        "execution_time_sec": execution_time,
+    }
+
+    csv_path = results_dir / "results_summary.csv"
+    summary_df = pd.DataFrame([summary_row])
+
+    if csv_path.exists():
+        summary_df.to_csv(csv_path, mode="a", header=False, index=False)
+    else:
+        summary_df.to_csv(csv_path, index=False)
+
+    print(f"Saved detailed results to {json_path}")
+    print(f"Updated summary table at {csv_path}")
 
 
 def negative_sampling(positive_item_ids, all_item_ids, num_neg_samples):
@@ -634,7 +699,7 @@ class EarlyStopping:
         self.counter = 0
         self.best_score = None
         self.early_stop = False
-        self.val_loss_min = np.Inf
+        self.val_loss_min = np.inf
         self.delta = delta
         self.checkpoint_path = checkpoint_path
 
@@ -668,28 +733,7 @@ class EarlyStopping:
 # -------------------
 def main(seed):
     cfg = Config()
-
-    # -------------------
-    # Initialize wandb
-    # -------------------
-    wandb_key = "YOUR_WANDB_KEY"
-    wandb.login(key=wandb_key)
-    wandb.init(
-        project=cfg.WANDB_PROJECT,
-        name=f"{cfg.WANDB_PRE_NAME}_Seed_{seed}",
-        entity=cfg.WANDB_ENTITY,
-        config={
-            "batch_size": cfg.BATCH_SIZE,
-            "num_neg_samples": cfg.NUM_NEG_SAMPLES,
-            "lr": cfg.LR,
-            "weight_decay": cfg.WEIGHT_DECAY,
-            "epochs": cfg.EPOCHS,
-            "early_stop_patience": cfg.EARLY_STOP_PATIENCE,
-            "embedding_dim": cfg.EMBEDDING_DIM,
-            "hidden_dim": cfg.HIDDEN_DIM,
-            "dropout": cfg.DROPOUT
-        }
-    )
+    run_start_time = time.time()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -790,18 +834,6 @@ def main(seed):
               f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f} | "
               f"Val Precision: {val_precision:.4f} | Val Recall: {val_recall:.4f} | Val NDCG: {val_ndcg:.4f}")
 
-        # Log metrics to wandb
-        wandb.log({
-            "epoch": epoch + 1,
-            "train_loss": train_loss,
-            "train_acc": train_acc,
-            "val_loss": val_loss,
-            "val_acc": val_acc,
-            "val_precision": val_precision,
-            "val_recall": val_recall,
-            "val_ndcg": val_ndcg
-        })
-
         # Early stopping check
         early_stopper(val_loss, model)
         if early_stopper.early_stop:
@@ -838,14 +870,6 @@ def main(seed):
     print(f"Test Results -> Loss: {test_loss:.4f}, Accuracy: {test_acc:.4f}, "
           f"Precision: {test_precision:.4f}, Recall: {test_recall:.4f}, NDCG: {test_ndcg:.4f}")
 
-    wandb.log({
-        "test_loss": test_loss,
-        "test_acc": test_acc,
-        "test_precision": test_precision,
-        "test_recall": test_recall,
-        "test_ndcg": test_ndcg
-    })
-
     # -------------------
     # Ranking-Based Testing
     # -------------------
@@ -873,16 +897,20 @@ def main(seed):
               f"Recall: {ranking_results[k]['recall']:.4f}, "
               f"NDCG: {ranking_results[k]['ndcg']:.4f}")
 
-    # Optionally, log these to wandb as well:
-    for k in top_k_list:
-        wandb.log({
-            f"precision@{k}": ranking_results[k]['precision'],
-            f"recall@{k}": ranking_results[k]['recall'],
-            f"ndcg@{k}": ranking_results[k]['ndcg']
-        })
-
-    wandb.finish()
-
+    test_metrics = {
+        "loss": test_loss,
+        "accuracy": test_acc,
+        "precision": test_precision,
+        "recall": test_recall,
+        "ndcg": test_ndcg,
+    }
+    save_run_results(
+        cfg=cfg,
+        seed=seed,
+        test_metrics=test_metrics,
+        ranking_results=ranking_results,
+        execution_time=time.time() - run_start_time,
+    )
     print("Done.")
 
 
