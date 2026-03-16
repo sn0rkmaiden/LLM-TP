@@ -3,12 +3,13 @@ import math
 import time
 import random
 import pickle
-import json
 import numpy as np
 import pandas as pd
 import argparse
-from datetime import datetime
+import json
+import re
 from pathlib import Path
+from datetime import datetime
 
 import torch
 import torch.nn as nn
@@ -16,6 +17,8 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
 DATASET = 'movies'
+SCRIPT_NAME = "model.py"
+METHOD_NAME = "LLM-TP"
 
 
 def set_seed(seed):
@@ -36,8 +39,14 @@ def set_seed(seed):
 class Config:
     # Data paths
     ITEM_EMBEDDINGS_PATH = f"../data/{DATASET}/bert_item_features.pkl"
+if DATASET == "movies":
     USER_SHORT_TERM_PATH = f"../data/{DATASET}/bert_short_term_user_profiles.pkl"
     USER_LONG_TERM_PATH = f"../data/{DATASET}/bert_long_term_user_profiles.pkl"
+elif DATASET == "games":
+    USER_SHORT_TERM_PATH = f"../data/{DATASET}/bert_short_term_user_profiles_train.pkl"
+    USER_LONG_TERM_PATH = f"../data/{DATASET}/bert_long_term_user_profiles_train.pkl"
+else:
+    raise ValueError(f"Unsupported dataset: {DATASET}")
 
     TRAIN_PATH = f"../data/{DATASET}/train.csv"
     VAL_PATH = f"../data/{DATASET}/validation.csv"
@@ -68,61 +77,55 @@ def load_interactions_csv(path):
     return df
 
 
-def save_run_results(cfg, seed, test_metrics, ranking_results, execution_time=None):
+def save_run_results(script_name, method_name, dataset, seed, config_dict, test_metrics, ranking_results, execution_time_sec=None, checkpoint_path=None):
     results_dir = Path(__file__).resolve().parent / "results"
-    results_dir.mkdir(exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
 
-    base_name = getattr(cfg, "WANDB_PRE_NAME", Path(__file__).stem)
-    run_name = f"{base_name}_Seed_{seed}"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    seed_label = "none" if seed is None else str(seed)
+    safe_method = re.sub(r"[^A-Za-z0-9_-]+", "_", method_name.lower())
+    safe_script = Path(script_name).stem.lower()
 
     payload = {
-        "run_name": run_name,
         "timestamp": timestamp,
-        "dataset": DATASET,
+        "script_name": script_name,
+        "method_name": method_name,
+        "dataset": dataset,
         "seed": seed,
-        "config": {
-            "batch_size": cfg.BATCH_SIZE,
-            "num_neg_samples": cfg.NUM_NEG_SAMPLES,
-            "lr": cfg.LR,
-            "weight_decay": cfg.WEIGHT_DECAY,
-            "epochs": cfg.EPOCHS,
-            "early_stop_patience": cfg.EARLY_STOP_PATIENCE,
-            "embedding_dim": cfg.EMBEDDING_DIM,
-            "hidden_dim": cfg.HIDDEN_DIM,
-            "dropout": cfg.DROPOUT,
-        },
+        "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else None,
+        "execution_time_sec": execution_time_sec,
+        "config": config_dict,
         "test_metrics": test_metrics,
-        "ranking_results": {str(k): v for k, v in ranking_results.items()},
-        "execution_time_sec": execution_time,
+        "ranking_results": ranking_results,
     }
 
-    json_path = results_dir / f"{run_name}_{timestamp}.json"
+    json_path = results_dir / f"{safe_script}_{safe_method}_{dataset}_seed{seed_label}_{timestamp}.json"
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
 
     summary_row = {
         "timestamp": timestamp,
-        "run_name": run_name,
-        "dataset": DATASET,
+        "script_name": script_name,
+        "method_name": method_name,
+        "dataset": dataset,
         "seed": seed,
-        "test_loss": test_metrics["loss"],
-        "test_accuracy": test_metrics["accuracy"],
-        "test_precision": test_metrics["precision"],
-        "test_recall": test_metrics["recall"],
-        "test_ndcg": test_metrics["ndcg"],
+        "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else None,
+        "test_loss": test_metrics.get("loss"),
+        "test_accuracy": test_metrics.get("accuracy"),
+        "test_precision": test_metrics.get("precision"),
+        "test_recall": test_metrics.get("recall"),
+        "test_ndcg": test_metrics.get("ndcg"),
         "precision@10": ranking_results.get(10, {}).get("precision"),
         "recall@10": ranking_results.get(10, {}).get("recall"),
         "ndcg@10": ranking_results.get(10, {}).get("ndcg"),
         "precision@20": ranking_results.get(20, {}).get("precision"),
         "recall@20": ranking_results.get(20, {}).get("recall"),
         "ndcg@20": ranking_results.get(20, {}).get("ndcg"),
-        "execution_time_sec": execution_time,
+        "execution_time_sec": execution_time_sec,
     }
 
-    csv_path = results_dir / "results_summary.csv"
+    csv_path = results_dir / f"{safe_script}_results.csv"
     summary_df = pd.DataFrame([summary_row])
-
     if csv_path.exists():
         summary_df.to_csv(csv_path, mode="a", header=False, index=False)
     else:
@@ -565,7 +568,7 @@ class EarlyStopping:
 
 def main(seed):
     cfg = Config()
-    run_start_time = time.time()
+    start_time = time.time()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -632,10 +635,15 @@ def main(seed):
 
     criterion = nn.CrossEntropyLoss()
 
+    checkpoint_dir = Path(__file__).resolve().parent / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    seed_label = "none" if seed is None else str(seed)
+    checkpoint_path = checkpoint_dir / f"model_{METHOD_NAME.lower()}_{DATASET}_seed{seed_label}.pt"
+
     early_stopper = EarlyStopping(
         patience=cfg.EARLY_STOP_PATIENCE,
         verbose=True,
-        checkpoint_path=f"best_model_Seed_{seed}.pt"
+        checkpoint_path=str(checkpoint_path)
     )
 
     for epoch in range(cfg.EPOCHS):
@@ -658,7 +666,7 @@ def main(seed):
     # Load best model
     # -------------------
     print("Loading best model weights...")
-    model.load_state_dict(torch.load(f"best_model_Seed_{seed}.pt"))
+    model.load_state_dict(torch.load(checkpoint_path))
 
     # -------------------
     # Testing (batch-based evaluation)
@@ -704,6 +712,17 @@ def main(seed):
               f"Recall: {ranking_results[k]['recall']:.4f}, "
               f"NDCG: {ranking_results[k]['ndcg']:.4f}")
 
+    config_dict = {
+        "batch_size": cfg.BATCH_SIZE,
+        "num_neg_samples": cfg.NUM_NEG_SAMPLES,
+        "lr": cfg.LR,
+        "weight_decay": cfg.WEIGHT_DECAY,
+        "epochs": cfg.EPOCHS,
+        "early_stop_patience": cfg.EARLY_STOP_PATIENCE,
+        "embedding_dim": cfg.EMBEDDING_DIM,
+        "hidden_dim": cfg.HIDDEN_DIM,
+        "dropout": cfg.DROPOUT,
+    }
     test_metrics = {
         "loss": test_loss,
         "accuracy": test_acc,
@@ -711,12 +730,17 @@ def main(seed):
         "recall": test_recall,
         "ndcg": test_ndcg,
     }
+    execution_time_sec = time.time() - start_time
     save_run_results(
-        cfg=cfg,
+        script_name=SCRIPT_NAME,
+        method_name=METHOD_NAME,
+        dataset=DATASET,
         seed=seed,
+        config_dict=config_dict,
         test_metrics=test_metrics,
         ranking_results=ranking_results,
-        execution_time=time.time() - run_start_time,
+        execution_time_sec=execution_time_sec,
+        checkpoint_path=checkpoint_path,
     )
 
     print("Done.")
@@ -737,6 +761,4 @@ def parse_arguments():
 if __name__ == "__main__":
     args = parse_arguments()
     set_seed(args.seed)
-    start_time = time.time()
     main(args.seed)
-    print(f'Execution Time: {time.time() - start_time}.')
