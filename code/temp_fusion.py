@@ -46,13 +46,13 @@ def set_seed(seed):
 class Config:
 
     # Data paths
-    ITEM_EMBEDDINGS_PATH = f"../datasets/{DATASET}/bert_item_features.pkl"
-    USER_SHORT_TERM_PATH = f"../datasets/{DATASET}/bert_centric_based_short_term_user_profiles.pkl"
-    USER_LONG_TERM_PATH = f"../datasets/{DATASET}/bert_centric_based_user_profiles.pkl"  # Consider it as Long-term centric-based
+    ITEM_EMBEDDINGS_PATH = f"../data/{DATASET}/bert_item_features.pkl"
+    USER_SHORT_TERM_PATH = f"../data/{DATASET}/bert_centric_based_short_term_user_profiles.pkl"
+    USER_LONG_TERM_PATH = f"../data/{DATASET}/bert_centric_based_user_profiles.pkl"  # Consider it as Long-term centric-based
 
-    TRAIN_PATH = f"../datasets/{DATASET}/train.csv"
-    VAL_PATH = f"../datasets/{DATASET}/validation.csv"
-    TEST_PATH = f"../datasets/{DATASET}/test.csv"
+    TRAIN_PATH = f"../data/{DATASET}/train.csv"
+    VAL_PATH = f"../data/{DATASET}/validation.csv"
+    TEST_PATH = f"../data/{DATASET}/test.csv"
 
     # Training hyperparameters
     BATCH_SIZE = 2048
