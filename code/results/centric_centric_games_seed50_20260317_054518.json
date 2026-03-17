@@ -1,0 +1,39 @@
+{
+  "timestamp": "20260317_054518",
+  "script_name": "centric.py",
+  "method_name": "Centric",
+  "dataset": "games",
+  "seed": 50,
+  "checkpoint_path": "/home/petrova_am/LLM-TP/code/checkpoints/centric_centric_games_seed50.pt",
+  "execution_time_sec": 557.6286654472351,
+  "config": {
+    "batch_size": 2048,
+    "num_neg_samples": 5,
+    "lr": 0.001,
+    "weight_decay": 1e-05,
+    "epochs": 100,
+    "early_stop_patience": 5,
+    "embedding_dim": 384,
+    "hidden_dim": 128,
+    "dropout": 0.2
+  },
+  "test_metrics": {
+    "loss": 0.4072266399860382,
+    "accuracy": 0.8460761673583581,
+    "precision": 0.6332768528466339,
+    "recall": 0.18017752338241907,
+    "ndcg": 0.6332768528466339
+  },
+  "ranking_results": {
+    "10": {
+      "precision": 0.01021116575065071,
+      "recall": 0.06058134833807378,
+      "ndcg": 0.04915829257414377
+    },
+    "20": {
+      "precision": 0.00794041076077503,
+      "recall": 0.09183624173908551,
+      "ndcg": 0.061573083951807064
+    }
+  }
+}

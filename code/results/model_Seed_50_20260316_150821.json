@@ -1,0 +1,37 @@
+{
+  "run_name": "model_Seed_50",
+  "timestamp": "20260316_150821",
+  "dataset": "movies",
+  "seed": 50,
+  "config": {
+    "batch_size": 2048,
+    "num_neg_samples": 5,
+    "lr": 0.001,
+    "weight_decay": 1e-05,
+    "epochs": 100,
+    "early_stop_patience": 5,
+    "embedding_dim": 384,
+    "hidden_dim": 256,
+    "dropout": 0.2
+  },
+  "test_metrics": {
+    "loss": 0.40793604065071454,
+    "accuracy": 0.8398141115290638,
+    "precision": 0.5778548243043348,
+    "recall": 0.14024611218838176,
+    "ndcg": 0.5778548243043348
+  },
+  "ranking_results": {
+    "10": {
+      "precision": 0.004970000000000039,
+      "recall": 0.013460708857172881,
+      "ndcg": 0.02231571972977643
+    },
+    "20": {
+      "precision": 0.004294999999999984,
+      "recall": 0.022420121452286237,
+      "ndcg": 0.029931398792450575
+    }
+  },
+  "execution_time_sec": 4344.312840461731
+}

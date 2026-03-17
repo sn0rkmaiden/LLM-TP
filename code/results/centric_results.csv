@@ -1,0 +1,2 @@
+timestamp,script_name,method_name,dataset,seed,checkpoint_path,test_loss,test_accuracy,test_precision,test_recall,test_ndcg,precision@10,recall@10,ndcg@10,precision@20,recall@20,ndcg@20,execution_time_sec
+20260317_054518,centric.py,Centric,games,50,/home/petrova_am/LLM-TP/code/checkpoints/centric_centric_games_seed50.pt,0.4072266399860382,0.8460761673583581,0.6332768528466339,0.18017752338241907,0.6332768528466339,0.01021116575065071,0.06058134833807378,0.04915829257414377,0.00794041076077503,0.09183624173908551,0.061573083951807064,557.6286654472351
