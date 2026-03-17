@@ -77,12 +77,12 @@ class Config:
     # TEST_PATH = f"../data/{DATASET}/test_sample10K.csv"
 
     ITEM_EMBEDDINGS_PATH = f"../data/{DATASET}/bert_item_features.pkl"
-if DATASET == "movies":
-    USER_EMBEDDINGS_PATH = f"../data/{DATASET}/bert_general_user_profiles.pkl"
-elif DATASET == "games":
-    USER_EMBEDDINGS_PATH = f"../data/{DATASET}/bert_general_user_profiles_train.pkl"
-else:
-    raise ValueError(f"Unsupported dataset: {DATASET}")
+    if DATASET == "movies":
+        USER_EMBEDDINGS_PATH = f"../data/{DATASET}/bert_general_user_profiles.pkl"
+    elif DATASET == "games":
+        USER_EMBEDDINGS_PATH = f"../data/{DATASET}/bert_general_user_profiles_train.pkl"
+    else:
+        raise ValueError(f"Unsupported dataset: {DATASET}")                                                 
 
     TRAIN_PATH = f"../data/{DATASET}/train.csv"
     VAL_PATH = f"../data/{DATASET}/validation.csv"
