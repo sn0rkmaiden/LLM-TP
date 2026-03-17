@@ -1,0 +1,47 @@
+{
+  "script_name": "model.py",
+  "method_name": "LLM-TP",
+  "dataset": "movies",
+  "seed": 42,
+  "timestamp": "20260317_121004",
+  "checkpoint_path": "best_model_movies_seed_42.pt",
+  "config": {
+    "ITEM_EMBEDDINGS_PATH": "../data/movies/bert_item_features.pkl",
+    "USER_SHORT_TERM_PATH": "../data/movies/bert_short_term_user_profiles.pkl",
+    "USER_LONG_TERM_PATH": "../data/movies/bert_long_term_user_profiles.pkl",
+    "TRAIN_PATH": "../data/movies/train.csv",
+    "VAL_PATH": "../data/movies/validation.csv",
+    "TEST_PATH": "../data/movies/test.csv",
+    "BATCH_SIZE": 2048,
+    "NUM_NEG_SAMPLES": 5,
+    "LR": 0.001,
+    "WEIGHT_DECAY": 1e-05,
+    "EPOCHS": 100,
+    "EARLY_STOP_PATIENCE": 5,
+    "EMBEDDING_DIM": 384,
+    "HIDDEN_DIM": 256,
+    "DROPOUT": 0.2,
+    "NUM_WORKERS": 4,
+    "MULTI_GPU": true
+  },
+  "test_metrics": {
+    "loss": 0.4103043892166831,
+    "accuracy": 0.8387802599842723,
+    "precision": 0.5758929136391436,
+    "recall": 0.11902177024474371,
+    "ndcg": 0.5758929136391436
+  },
+  "ranking_results": {
+    "10": {
+      "precision": 0.004280000000000032,
+      "recall": 0.011493331288378664,
+      "ndcg": 0.019249535402645113
+    },
+    "20": {
+      "precision": 0.0037500000000000072,
+      "recall": 0.019667608606180626,
+      "ndcg": 0.026250392424934047
+    }
+  },
+  "execution_time_sec": 3452.4224479198456
+}
