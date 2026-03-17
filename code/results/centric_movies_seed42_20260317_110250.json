@@ -1,0 +1,47 @@
+{
+  "script_name": "centric.py",
+  "method_name": "Centric",
+  "dataset": "movies",
+  "seed": 42,
+  "timestamp": "20260317_110250",
+  "checkpoint_path": "best_centric_movies_seed_42.pt",
+  "config": {
+    "ITEM_EMBEDDINGS_PATH": "../data/movies/bert_item_features.pkl",
+    "USER_EMBEDDINGS_PATH": "../data/movies/bert_general_user_profiles.pkl",
+    "TRAIN_PATH": "../data/movies/train.csv",
+    "VAL_PATH": "../data/movies/validation.csv",
+    "TEST_PATH": "../data/movies/test.csv",
+    "BATCH_SIZE": 2048,
+    "NUM_NEG_SAMPLES": 5,
+    "LR": 0.001,
+    "WEIGHT_DECAY": 1e-05,
+    "EPOCHS": 100,
+    "EARLY_STOP_PATIENCE": 5,
+    "EMBEDDING_DIM": 384,
+    "HIDDEN_DIM": 128,
+    "DROPOUT": 0.2,
+    "NUM_WORKERS": 4,
+    "MULTI_GPU": true,
+    "RUN_NAME": "centric_movies"
+  },
+  "test_metrics": {
+    "loss": 0.41184352473779157,
+    "accuracy": 0.8378413466431748,
+    "precision": 0.5703396557886817,
+    "recall": 0.10528895276754789,
+    "ndcg": 0.5703396557886817
+  },
+  "ranking_results": {
+    "10": {
+      "precision": 0.004810000000000038,
+      "recall": 0.012679147381398494,
+      "ndcg": 0.02212686789377856
+    },
+    "20": {
+      "precision": 0.003924999999999998,
+      "recall": 0.02078998339226904,
+      "ndcg": 0.028679769032187146
+    }
+  },
+  "execution_time_sec": 4925.498836755753
+}
