@@ -2,11 +2,10 @@ import math
 import time
 import random
 import pickle
+import json
 import numpy as np
 import pandas as pd
 import argparse
-import json
-import re
 from pathlib import Path
 
 import torch
@@ -15,9 +14,9 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
 
-DATASET = 'games'
-SCRIPT_NAME = "ablation.py"
-METHOD_NAME = "Ablation-ShortTerm-NoAtt"
+DATASET = 'movies'
+SCRIPT_NAME = 'ablation.py'
+METHOD_NAME = 'Ablation'
 
 # -------------------
 # Set seeds
@@ -47,12 +46,7 @@ class Config:
     # TEST_PATH = f"../data/{DATASET}/test_sample10K.csv"
 
     ITEM_EMBEDDINGS_PATH = f"../data/{DATASET}/bert_item_features.pkl"
-    if DATASET == "movies":
-        USER_EMBEDDINGS_PATH = f"../data/{DATASET}/bert_short_term_user_profiles.pkl"
-    elif DATASET == "games":
-        USER_EMBEDDINGS_PATH = f"../data/{DATASET}/bert_short_term_user_profiles_train.pkl"
-    else:
-        raise ValueError(f"Unsupported dataset: {DATASET}")
+    USER_EMBEDDINGS_PATH = (f"../data/{DATASET}/bert_short_term_user_profiles.pkl" if DATASET == 'movies' else f"../data/{DATASET}/bert_short_term_user_profiles_train.pkl")
 
     TRAIN_PATH = f"../data/{DATASET}/train.csv"
     VAL_PATH = f"../data/{DATASET}/validation.csv"
@@ -75,6 +69,8 @@ class Config:
     NUM_WORKERS = 4  # Number of workers for DataLoader
     MULTI_GPU = True  # Use DataParallel if multiple GPUs are available
 
+    RUN_NAME = f"ablation_{DATASET}"
+
 
 # -------------------
 # Utility functions
@@ -92,62 +88,27 @@ def load_interactions_csv(path):
     return df
 
 
-def save_run_results(script_name, method_name, dataset, seed, config_dict, test_metrics, ranking_results, execution_time_sec=None, checkpoint_path=None):
+def save_run_results_json(script_name, method_name, dataset, seed, cfg, checkpoint_path, test_metrics, ranking_results, execution_time_sec):
     results_dir = Path(__file__).resolve().parent / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
-
+    results_dir.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    seed_label = "none" if seed is None else str(seed)
-    safe_method = re.sub(r"[^A-Za-z0-9_-]+", "_", method_name.lower())
-    safe_script = Path(script_name).stem.lower()
-
+    safe_seed = "none" if seed is None else str(seed)
+    json_path = results_dir / f"{Path(script_name).stem}_{dataset}_seed{safe_seed}_{timestamp}.json"
     payload = {
-        "timestamp": timestamp,
         "script_name": script_name,
         "method_name": method_name,
         "dataset": dataset,
         "seed": seed,
-        "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else None,
-        "execution_time_sec": execution_time_sec,
-        "config": config_dict,
+        "timestamp": timestamp,
+        "checkpoint_path": str(checkpoint_path),
+        "config": {k: v for k, v in vars(cfg.__class__).items() if k.isupper()},
         "test_metrics": test_metrics,
         "ranking_results": ranking_results,
-    }
-
-    json_path = results_dir / f"{safe_script}_{safe_method}_{dataset}_seed{seed_label}_{timestamp}.json"
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-
-    summary_row = {
-        "timestamp": timestamp,
-        "script_name": script_name,
-        "method_name": method_name,
-        "dataset": dataset,
-        "seed": seed,
-        "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else None,
-        "test_loss": test_metrics.get("loss"),
-        "test_accuracy": test_metrics.get("accuracy"),
-        "test_precision": test_metrics.get("precision"),
-        "test_recall": test_metrics.get("recall"),
-        "test_ndcg": test_metrics.get("ndcg"),
-        "precision@10": ranking_results.get(10, {}).get("precision"),
-        "recall@10": ranking_results.get(10, {}).get("recall"),
-        "ndcg@10": ranking_results.get(10, {}).get("ndcg"),
-        "precision@20": ranking_results.get(20, {}).get("precision"),
-        "recall@20": ranking_results.get(20, {}).get("recall"),
-        "ndcg@20": ranking_results.get(20, {}).get("ndcg"),
         "execution_time_sec": execution_time_sec,
     }
-
-    csv_path = results_dir / f"{safe_script}_results.csv"
-    summary_df = pd.DataFrame([summary_row])
-    if csv_path.exists():
-        summary_df.to_csv(csv_path, mode="a", header=False, index=False)
-    else:
-        summary_df.to_csv(csv_path, index=False)
-
-    print(f"Saved detailed results to {json_path}")
-    print(f"Updated summary table at {csv_path}")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    print(f"Saved run results to {json_path}")
 
 
 def negative_sampling(positive_item_ids, all_item_ids, num_neg_samples):
@@ -635,7 +596,7 @@ class EarlyStopping:
 # -------------------
 def main(seed):
     cfg = Config()
-    start_time = time.time()
+    run_start_time = time.time()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -712,15 +673,11 @@ def main(seed):
     # -------------------
     # Early Stopping
     # -------------------
-    checkpoint_dir = Path(__file__).resolve().parent / "checkpoints"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    seed_label = "none" if seed is None else str(seed)
-    checkpoint_path = checkpoint_dir / f"ablation_{METHOD_NAME.lower()}_{DATASET}_seed{seed_label}.pt"
-
+    checkpoint_path = f"best_{Path(SCRIPT_NAME).stem}_{DATASET}_seed_{seed}.pt"
     early_stopper = EarlyStopping(
         patience=cfg.EARLY_STOP_PATIENCE,
         verbose=True,
-        checkpoint_path=str(checkpoint_path)
+        checkpoint_path=checkpoint_path
     )
 
     # -------------------
@@ -798,38 +755,12 @@ def main(seed):
               f"Recall: {ranking_results[k]['recall']:.4f}, "
               f"NDCG: {ranking_results[k]['ndcg']:.4f}")
 
-    config_dict = {
-        "batch_size": cfg.BATCH_SIZE,
-        "num_neg_samples": cfg.NUM_NEG_SAMPLES,
-        "lr": cfg.LR,
-        "weight_decay": cfg.WEIGHT_DECAY,
-        "epochs": cfg.EPOCHS,
-        "early_stop_patience": cfg.EARLY_STOP_PATIENCE,
-        "embedding_dim": cfg.EMBEDDING_DIM,
-        "hidden_dim": cfg.HIDDEN_DIM,
-        "dropout": cfg.DROPOUT,
-    }
-    test_metrics = {
-        "loss": test_loss,
-        "accuracy": test_acc,
-        "precision": test_precision,
-        "recall": test_recall,
-        "ndcg": test_ndcg,
-    }
-    execution_time_sec = time.time() - start_time
-    save_run_results(
-        script_name=SCRIPT_NAME,
-        method_name=METHOD_NAME,
-        dataset=DATASET,
-        seed=seed,
-        config_dict=config_dict,
-        test_metrics=test_metrics,
-        ranking_results=ranking_results,
-        execution_time_sec=execution_time_sec,
-        checkpoint_path=checkpoint_path,
-    )
+
+    test_metrics = {"loss": test_loss, "accuracy": test_acc, "precision": test_precision, "recall": test_recall, "ndcg": test_ndcg}
+    save_run_results_json(SCRIPT_NAME, METHOD_NAME, DATASET, seed, cfg, checkpoint_path, test_metrics, ranking_results, time.time() - run_start_time)
 
     print("Done.")
+
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Set seed for reproducibility.")
@@ -843,11 +774,9 @@ def parse_arguments():
     return args
 
 
-
-
 if __name__ == "__main__":
-    print(f"{METHOD_NAME}")
+    print(f'Proposed-{DATASET}-Only-ShortTerm-NoAtt')
     args = parse_arguments()
     set_seed(args.seed)
     main(args.seed)
-    print(f"{METHOD_NAME}")
+    print(f'Proposed-{DATASET}-Only-ShortTerm-NoAtt')
