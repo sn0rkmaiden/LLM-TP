@@ -39,8 +39,9 @@ DATASET_REPO   = "McAuley-Lab/Amazon-Reviews-2023"
 METADATA_NAME  = "raw_meta_Movies_and_TV"
 SBERT_MODEL    = "all-MiniLM-L6-v2"
 MIN_DESC_LEN   = 500          # characters — same filter the authors used
-MATCH_THRESHOLD = 0.9999      # cosine similarity threshold for exact match
+MATCH_THRESHOLD = 0.95        # cosine similarity threshold (lowered from 0.9999)
 BATCH_SIZE     = 256          # SBERT encoding batch size
+DEBUG_TOP_K    = 5            # show top K matches for diagnostics
 
 DATA_DIR  = Path(__file__).resolve().parents[1] / "data" / "movies"
 ITEM_PKL  = DATA_DIR / "bert_item_features.pkl"
@@ -152,7 +153,15 @@ def main():
 
         for b_idx in range(len(buffer_descs)):
             best_idx = int(np.argmax(sims[b_idx]))
-            if sims[b_idx, best_idx] >= MATCH_THRESHOLD and not found_mask[best_idx]:
+            best_sim = float(sims[b_idx, best_idx])
+            
+            # Debug: show top matches on first batch
+            if processed < BATCH_SIZE and b_idx < 2:
+                top_k_sims = np.argsort(sims[b_idx])[-DEBUG_TOP_K:][::-1]
+                top_sims = [float(sims[b_idx, idx]) for idx in top_k_sims]
+                print(f"    DEBUG batch[{b_idx}]: top sims = {top_sims}")
+            
+            if best_sim >= MATCH_THRESHOLD and not found_mask[best_idx]:
                 found_mask[best_idx] = True
                 found[item_ids[best_idx]] = {
                     "asin":             buffer_asins[b_idx],
