@@ -23,11 +23,13 @@ python preprocessing/rebuild_metadata.py
 """
 
 import pickle
+import json
+import gzip
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from datasets import load_dataset
+import requests
 from sentence_transformers import SentenceTransformer
 
 # ------------------------------------------------------------------
@@ -73,29 +75,44 @@ def main():
 
     sbert = SentenceTransformer(SBERT_MODEL)
 
-    print(f"Streaming {METADATA_NAME} from Hugging Face ...")
+    print(f"Streaming Movies & TV metadata from Hugging Face (direct HTTP) ...")
+    
+    # Direct download URL for the parquet file
+    hf_url = "https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023/resolve/main/raw_meta_Movies_and_TV/default/0000.parquet"
+    
     try:
-        # Try streaming without trust_remote_code (newer datasets library)
-        dataset = load_dataset(
-            DATASET_REPO,
-            METADATA_NAME,
-            split="full",
-            streaming=True,
-        )
-    except RuntimeError as e:
-        if "no longer supported" in str(e).lower():
-            print("  Error: dataset loading script not supported. Trying parquet format...")
-            # Fallback: load parquet directly
-            dataset = load_dataset(
-                "parquet",
-                data_files=f"https://huggingface.co/datasets/{DATASET_REPO}/resolve/main/raw_meta_Movies_and_TV/default/0000.parquet",
-                split=None,
-                streaming=True,
-            )
-            if isinstance(dataset, dict):
-                dataset = dataset["train"]
-        else:
-            raise
+        import pyarrow.parquet as pq
+        print(f"  Downloading parquet file from HF...")
+        resp = requests.get(hf_url, stream=True, timeout=60)
+        resp.raise_for_status()
+        
+        # Buffer to temporary file then read
+        temp_file = "/tmp/amazon_meta.parquet"
+        with open(temp_file, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1024*1024):
+                f.write(chunk)
+        
+        table = pq.read_table(temp_file)
+        records = table.to_pylist()
+        print(f"  Loaded {len(records)} records from parquet.")
+        
+    except Exception as e:
+        print(f"  Parquet failed ({e}), trying JSON fallback...")
+        # Fallback: try JSON lines endpoint
+        hf_url_json = "https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023/raw/main/raw_meta_Movies_and_TV.jsonl.gz"
+        print(f"  Downloading JSON lines from HF...")
+        resp = requests.get(hf_url_json, stream=True, timeout=60)
+        resp.raise_for_status()
+        
+        records = []
+        with gzip.open(resp.raw, 'rt', encoding='utf-8') as f:
+            for line in f:
+                if line.strip():
+                    records.append(json.loads(line))
+        print(f"  Loaded {len(records)} records from JSON lines.")
+    
+    # Iterate through records
+    dataset = iter(records)
 
     # Buffer items whose description passes the length filter
     buffer_asins  = []
@@ -134,14 +151,19 @@ def main():
 
     processed = 0
     for record in dataset:
-        # The description field may be nested or a plain string depending on version
-        desc = record.get("description", "") or ""
+        # Handle nested or flat description fields
+        desc = record.get("description")
         if isinstance(desc, list):
-            desc = " ".join(desc)
+            desc = " ".join(str(d) for d in desc if d)
+        else:
+            desc = str(desc) if desc else ""
         desc = desc.strip()
 
-        title = record.get("title", "") or ""
-        asin  = record.get("parent_asin", record.get("asin", ""))
+        title = str(record.get("title") or "").strip()
+        # Try different ASIN field names
+        asin = record.get("parent_asin") or record.get("asin")
+        if not asin:
+            continue
 
         if len(desc) < MIN_DESC_LEN:
             continue
@@ -159,10 +181,10 @@ def main():
             print(f"  Scanned {processed:,} candidates | matched {n_found}/{n_target}")
 
         if n_found == n_target:
-            print("  All items matched — stopping stream early.")
+            print("  All items matched — stopping early.")
             break
 
-    flush_buffer()   # handle leftover buffer
+    flush_buffer()
 
     n_found = int(found_mask.sum())
     print(f"\nMatching complete: {n_found}/{n_target} items recovered.")
