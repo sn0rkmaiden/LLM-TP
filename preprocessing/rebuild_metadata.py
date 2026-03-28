@@ -39,7 +39,7 @@ DATASET_REPO   = "McAuley-Lab/Amazon-Reviews-2023"
 METADATA_NAME  = "raw_meta_Movies_and_TV"
 SBERT_MODEL    = "all-MiniLM-L6-v2"
 MIN_DESC_LEN   = 500          # characters — same filter the authors used
-MATCH_THRESHOLD = 0.95        # cosine similarity threshold (lowered from 0.9999)
+MATCH_THRESHOLD = 0.85        # cosine similarity threshold (lowered to recover more items)
 BATCH_SIZE     = 256          # SBERT encoding batch size
 DEBUG_TOP_K    = 5            # show top K matches for diagnostics
 
