@@ -74,13 +74,28 @@ def main():
     sbert = SentenceTransformer(SBERT_MODEL)
 
     print(f"Streaming {METADATA_NAME} from Hugging Face ...")
-    dataset = load_dataset(
-        DATASET_REPO,
-        METADATA_NAME,
-        split="full",
-        streaming=True,
-        trust_remote_code=True,
-    )
+    try:
+        # Try streaming without trust_remote_code (newer datasets library)
+        dataset = load_dataset(
+            DATASET_REPO,
+            METADATA_NAME,
+            split="full",
+            streaming=True,
+        )
+    except RuntimeError as e:
+        if "no longer supported" in str(e).lower():
+            print("  Error: dataset loading script not supported. Trying parquet format...")
+            # Fallback: load parquet directly
+            dataset = load_dataset(
+                "parquet",
+                data_files=f"https://huggingface.co/datasets/{DATASET_REPO}/resolve/main/raw_meta_Movies_and_TV/default/0000.parquet",
+                split=None,
+                streaming=True,
+            )
+            if isinstance(dataset, dict):
+                dataset = dataset["train"]
+        else:
+            raise
 
     # Buffer items whose description passes the length filter
     buffer_asins  = []
