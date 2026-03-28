@@ -6,7 +6,7 @@ SBERT-encodes them and saves both the raw text and the embeddings.
 This script reproduces the original authors' preprocessing pipeline:
   - For each user, assemble their interaction history as JSON
     {title, description, timestamp} using the recovered item metadata
-  - Call GPT-4o-mini with prompt_long / prompt_short / prompt_general
+  - Call the selected LLM with prompt_long / prompt_short / prompt_general
   - SBERT-encode the returned text
   - Save two outputs per profile type:
       *_text.pkl  — DataFrame(user_id, profile_text)   ← needed by generate_contexts.py
@@ -16,19 +16,25 @@ This script reproduces the original authors' preprocessing pipeline:
 Usage
 -----
 python preprocessing/generate_profiles.py --split all
-python preprocessing/generate_profiles.py --llm_model Qwen/Qwen2.5-7B-Instruct --max_users 50 --split all
+python preprocessing/generate_profiles.py --llm_model microsoft/phi-3-mini-4k-instruct --max_users 50 --split all
+python preprocessing/generate_profiles.py --llm_model mistralai/Mistral-7B-Instruct-v0.1 --split all
 
 The model is downloaded from Hugging Face on first run and cached locally.
 For gated models (e.g. Llama) set HF_TOKEN in your environment first.
 
-Outputs (data/movies/)
-----------------------
-bert_long_term_user_profiles_text.pkl
-bert_long_term_user_profiles.pkl
-bert_short_term_user_profiles_text.pkl
-bert_short_term_user_profiles.pkl
-bert_general_user_profiles_text.pkl
-bert_general_user_profiles.pkl
+Recommended smaller models:
+  - microsoft/phi-3-mini-4k-instruct (3.8B) — default, fastest
+  - mistralai/Mistral-7B-Instruct-v0.1 (7B) — balanced quality/speed
+  - meta-llama/Llama-2-7b-chat (7B) — good quality, needs HF_TOKEN
+
+Outputs (data/movies/) — filenames include model name
+------------------------------------------------------
+bert_long_term_user_profiles_{MODEL}_text.pkl
+bert_long_term_user_profiles_{MODEL}.pkl
+bert_short_term_user_profiles_{MODEL}_text.pkl
+bert_short_term_user_profiles_{MODEL}.pkl
+bert_general_user_profiles_{MODEL}_text.pkl
+bert_general_user_profiles_{MODEL}.pkl
 """
 
 import json
@@ -47,7 +53,7 @@ from sentence_transformers import SentenceTransformer
 # Config
 # ------------------------------------------------------------------
 DATASET             = "movies"
-DEFAULT_LLM_MODEL  = "Qwen/Qwen2.5-7B-Instruct"
+DEFAULT_LLM_MODEL  = "microsoft/phi-3-mini-4k-instruct"  # Changed to smaller model (3.8B)
 SBERT_MODEL         = "all-MiniLM-L6-v2"
 TEMPERATURE         = 0.2
 MAX_NEW_TOKENS      = 256
@@ -138,6 +144,13 @@ def llm_call(pipe, prompt_text: str) -> str:
 # Main
 # ------------------------------------------------------------------
 def main(args):
+    llm_model = args.llm_model
+    
+    # Extract model name for file naming (e.g., "microsoft/phi-3-mini-4k-instruct" → "phi-3-mini-4k-instruct")
+    model_name_short = llm_model.split("/")[-1] if "/" in llm_model else llm_model
+    print(f"Using model: {llm_model}")
+    print(f"Output files will include: {model_name_short}")
+    
     # --- Load interactions ---
     splits_to_use = (
         ["train", "validation", "test"] if args.split == "all" else [args.split]
@@ -226,7 +239,7 @@ def main(args):
             "user_id":      uid_list,
             "profile_text": texts,
         })
-        text_path = DATA_DIR / f"{OUT_NAME[profile_type]}_text.pkl"
+        text_path = DATA_DIR / f"{OUT_NAME[profile_type]}_{model_name_short}_text.pkl"
         save_pickle(text_df, str(text_path))
         print(f"  Saved text profiles → {text_path}")
 
@@ -235,7 +248,7 @@ def main(args):
             "user_id": uid_list,
             "profile": list(embs),
         })
-        emb_path = DATA_DIR / f"{OUT_NAME[profile_type]}.pkl"
+        emb_path = DATA_DIR / f"{OUT_NAME[profile_type]}_{model_name_short}.pkl"
         save_pickle(emb_df, str(emb_path))
         print(f"  Saved embedding profiles → {emb_path}")
 
