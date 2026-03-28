@@ -1,0 +1,31 @@
+CONTEXT PROMPT
+task:
+  Given a user's general movie preferences and a specific target movie they are about to watch, generate a short situational or mood-based context that would naturally lead someone to choose that movie.
+
+  Objectives:
+    1. The context should describe a mood, situation, emotional state, or occasion — NOT the user's general preferences or viewing history.
+    2. The context must be plausible as a bridge between the user's taste and the specific target movie.
+    3. The context should be generic enough to not mention the user directly, but specific enough to meaningfully point toward the target movie.
+    4. Avoid retelling the movie's plot. Focus on the situational or emotional trigger that would make a viewer choose this film.
+
+  Inputs:
+    - user_description: A paragraph summarizing the user's stable, long-term movie preferences.
+    - target_title: The title of the movie the user is about to watch.
+    - target_description: A short description of the target movie.
+
+  Output Format:
+    - Produce a concise, single-paragraph context (200-400 characters) in natural language describing the mood or situation.
+    - The output should be rich in semantic context, suitable for embedding generation using SBERT.
+    - Do NOT include the movie title or character names in the output.
+
+user_description:
+{user_description}
+
+target_title:
+{target_title}
+
+target_description:
+{target_description}
+
+example_output:
+A quiet, introspective evening where the viewer craves a slow-burning story that challenges moral certainties, with a preference for psychological tension over action, and a desire for a film that lingers long after the credits roll.

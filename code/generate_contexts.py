@@ -1,0 +1,226 @@
+"""
+generate_contexts.py
+Preprocessing script: for each (user, GT_item) pair in the test set, generate K
+mood/situation contexts using an LLM, then SBERT-encode them and save to disk.
+
+The output is loaded by context_rec.py during context-augmented evaluation.
+
+Output format:
+    {(user_id, item_id): List[np.ndarray of shape (384,)]}
+    saved as data/<dataset>/bert_context_profiles_test.pkl
+
+Required inputs
+---------------
+1. bert_long_term_user_profiles_text.pkl
+       DataFrame with columns: user_id (int), profile_text (str)
+       Raw LLM-generated long-term profile text (not SBERT-encoded).
+       This is the same text that was encoded to produce bert_long_term_user_profiles.pkl.
+
+2. item_metadata.pkl
+       DataFrame with columns: item_id (int), title (str), description_text (str)
+       Raw item titles and descriptions used for context prompting.
+
+3. data/<dataset>/test.csv
+       Interaction file with columns: user_id, item_id (leave-one-out GT items).
+
+4. prompt/prompt_context.txt
+       Template with placeholders {user_description}, {target_title}, {target_description}.
+
+Environment variables
+---------------------
+HF_TOKEN  — optional, required only for gated HuggingFace models (e.g. Llama).
+
+Usage
+-----
+python code/generate_contexts.py --dataset movies --num_contexts 5
+python code/generate_contexts.py --llm_model Qwen/Qwen2.5-7B-Instruct --num_contexts 3
+"""
+
+import pickle
+import argparse
+import numpy as np
+import pandas as pd
+from pathlib import Path
+
+import torch
+from transformers import pipeline as hf_pipeline
+from sentence_transformers import SentenceTransformer
+
+
+# -------------------
+# Configuration
+# -------------------
+DEFAULT_DATASET = "movies"
+DEFAULT_NUM_CONTEXTS = 5
+DEFAULT_SBERT_MODEL = "all-MiniLM-L6-v2"
+DEFAULT_LLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+CONTEXT_TEMPERATURE = 0.9   # high temperature for diverse contexts
+CONTEXT_MAX_NEW_TOKENS = 200
+
+
+# -------------------
+# Helpers
+# -------------------
+def load_pickle(path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+def save_pickle(obj, path):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as f:
+        pickle.dump(obj, f)
+    print(f"Saved context embeddings to {path}")
+
+
+def load_prompt_template(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def build_prompt(template, user_description, target_title, target_description):
+    """Fill in the context prompt template."""
+    return (template
+            .replace("{user_description}", user_description)
+            .replace("{target_title}", target_title)
+            .replace("{target_description}", target_description))
+
+
+# -------------------
+# LLM pipeline setup
+# -------------------
+def build_llm_pipeline(model_name: str):
+    """Load a HuggingFace text-generation pipeline."""
+    print(f"Loading LLM: {model_name} (downloading on first run) ...")
+    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    pipe = hf_pipeline(
+        "text-generation",
+        model=model_name,
+        device_map="auto",
+        torch_dtype=dtype,
+    )
+    print(f"  LLM loaded on: {pipe.device}")
+    return pipe
+
+
+# -------------------
+# LLM context generation
+# -------------------
+def generate_contexts_for_pair(pipe, prompt_text, num_contexts):
+    """
+    Call the LLM num_contexts times with the same prompt.
+    Returns a list of generated context strings.
+    """
+    messages = [{"role": "user", "content": prompt_text}]
+    contexts = []
+    for _ in range(num_contexts):
+        output = pipe(
+            messages,
+            max_new_tokens=CONTEXT_MAX_NEW_TOKENS,
+            temperature=CONTEXT_TEMPERATURE,
+            do_sample=True,
+        )
+        generated = output[0]["generated_text"]
+        if isinstance(generated, list):
+            contexts.append(generated[-1]["content"].strip())
+        else:
+            contexts.append(generated.strip())
+    return contexts
+
+
+# -------------------
+# Main
+# -------------------
+def main(args):
+    dataset = args.dataset
+    num_contexts = args.num_contexts
+    llm_model = args.llm_model
+    sbert_model_name = args.sbert_model
+
+    data_dir = Path(__file__).resolve().parents[1] / "data" / dataset
+
+    # --- Load raw text data ---
+    user_text_path = data_dir / "bert_long_term_user_profiles_text.pkl"
+    item_meta_path = data_dir / "item_metadata.pkl"
+    test_path = data_dir / "test.csv"
+    out_path = data_dir / "bert_context_profiles_test.pkl"
+
+    print("Loading raw profile texts and item metadata...")
+    user_text_df = load_pickle(str(user_text_path))
+    item_meta_df = load_pickle(str(item_meta_path))
+    test_df = pd.read_csv(str(test_path))
+
+    # Build lookup dicts
+    user_text = {int(row["user_id"]): row["profile_text"]
+                 for _, row in user_text_df.iterrows()}
+    item_meta = {int(row["item_id"]): {"title": row["title"],
+                                        "description_text": row["description_text"]}
+                 for _, row in item_meta_df.iterrows()}
+
+    # --- Load prompt template ---
+    prompt_template = load_prompt_template(str(PROMPT_PATH))
+
+    # --- Set up LLM pipeline ---
+    pipe = build_llm_pipeline(llm_model)
+
+    # --- SBERT encoder ---
+    print(f"Loading SBERT model: {sbert_model_name}")
+    sbert = SentenceTransformer(sbert_model_name)
+
+    # --- Generate contexts ---
+    # Build unique (user_id, item_id) pairs from the test set
+    test_pairs = [
+        (int(row["user_id"]), int(row["item_id"]))
+        for row in test_df.itertuples(index=False)
+    ]
+
+    context_dict = {}   # {(user_id, item_id): List[np.ndarray shape (384,)]}
+    total = len(test_pairs)
+
+    print(f"Generating {num_contexts} contexts for {total} test (user, item) pairs...")
+    for idx, (user_id, item_id) in enumerate(test_pairs):
+        if user_id not in user_text:
+            print(f"  [{idx+1}/{total}] Skipping user {user_id}: no profile text found.")
+            continue
+        if item_id not in item_meta:
+            print(f"  [{idx+1}/{total}] Skipping item {item_id}: no metadata found.")
+            continue
+
+        user_desc = user_text[user_id]
+        item_title = item_meta[item_id]["title"]
+        item_desc = item_meta[item_id]["description_text"]
+
+        prompt_text = build_prompt(prompt_template, user_desc, item_title, item_desc)
+
+        ctx_texts = generate_contexts_for_pair(pipe, prompt_text, num_contexts)
+
+        # SBERT-encode all K contexts
+        ctx_embs = sbert.encode(ctx_texts, convert_to_numpy=True)  # shape (K, 384)
+        context_dict[(user_id, item_id)] = [ctx_embs[k] for k in range(len(ctx_texts))]
+
+        if (idx + 1) % 50 == 0 or (idx + 1) == total:
+            print(f"  [{idx+1}/{total}] Processed user {user_id}, item {item_id}.")
+
+    save_pickle(context_dict, str(out_path))
+    print(f"Done. Generated contexts for {len(context_dict)} / {total} pairs.")
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="Generate GT-aligned LLM contexts for test (user, item) pairs."
+    )
+    parser.add_argument("--dataset", type=str, default=DEFAULT_DATASET)
+    parser.add_argument("--num_contexts", type=int, default=DEFAULT_NUM_CONTEXTS,
+                        help="Number of contexts to generate per (user, item) pair.")
+    parser.add_argument("--llm_model", type=str, default=DEFAULT_LLM_MODEL,
+                        help="HuggingFace model ID, e.g. 'Qwen/Qwen2.5-7B-Instruct'.")
+    parser.add_argument("--sbert_model", type=str, default=DEFAULT_SBERT_MODEL,
+                        help="Sentence-Transformers model name for encoding contexts.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Seed (for reproducibility notes only; LLM calls are stochastic).")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_arguments()
+    main(args)
