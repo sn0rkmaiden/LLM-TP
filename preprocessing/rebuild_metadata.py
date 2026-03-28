@@ -75,41 +75,56 @@ def main():
 
     sbert = SentenceTransformer(SBERT_MODEL)
 
-    print(f"Streaming Movies & TV metadata from Hugging Face (direct HTTP) ...")
+    print(f"Loading Movies & TV metadata ...")
     
-    # Direct download URL for the parquet file
-    hf_url = "https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023/resolve/main/raw_meta_Movies_and_TV/default/0000.parquet"
+    # Check for local file first
+    local_meta_file = Path(__file__).resolve().parents[1] / "data" / "meta_Movies_and_TV.jsonl.gz"
     
-    try:
-        import pyarrow.parquet as pq
-        print(f"  Downloading parquet file from HF...")
-        resp = requests.get(hf_url, stream=True, timeout=60)
-        resp.raise_for_status()
-        
-        # Buffer to temporary file then read
-        temp_file = "/tmp/amazon_meta.parquet"
-        with open(temp_file, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=1024*1024):
-                f.write(chunk)
-        
-        table = pq.read_table(temp_file)
-        records = table.to_pylist()
-        print(f"  Loaded {len(records)} records from parquet.")
-        
-    except Exception as e:
-        print(f"  Parquet failed ({e}), trying JSON fallback...")
-        # Fallback: try JSON lines endpoint
-        hf_url_json = "https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023/raw/main/raw_meta_Movies_and_TV.jsonl.gz"
-        print(f"  Downloading JSON lines from HF...")
-        resp = requests.get(hf_url_json, stream=True, timeout=60)
-        resp.raise_for_status()
-        
+    if local_meta_file.exists():
+        print(f"  Found local metadata file: {local_meta_file}")
+        print(f"  Loading JSON lines from local file...")
         records = []
-        with gzip.open(resp.raw, 'rt', encoding='utf-8') as f:
+        with gzip.open(local_meta_file, 'rt', encoding='utf-8') as f:
             for line in f:
                 if line.strip():
                     records.append(json.loads(line))
-        print(f"  Loaded {len(records)} records from JSON lines.")
+        print(f"  Loaded {len(records)} records from local file.")
+    else:
+        print(f"  Local file not found, attempting download from Hugging Face...")
+        
+        # Direct download URL for the parquet file
+        hf_url = "https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023/resolve/main/raw_meta_Movies_and_TV/default/0000.parquet"
+        
+        try:
+            import pyarrow.parquet as pq
+            print(f"  Downloading parquet file from HF...")
+            resp = requests.get(hf_url, stream=True, timeout=60)
+            resp.raise_for_status()
+            
+            # Buffer to temporary file then read
+            temp_file = "/tmp/amazon_meta.parquet"
+            with open(temp_file, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=1024*1024):
+                    f.write(chunk)
+            
+            table = pq.read_table(temp_file)
+            records = table.to_pylist()
+            print(f"  Loaded {len(records)} records from parquet.")
+            
+        except Exception as e:
+            print(f"  Parquet failed ({e}), trying JSON fallback...")
+            # Fallback: try JSON lines endpoint
+            hf_url_json = "https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023/raw/main/raw_meta_Movies_and_TV.jsonl.gz"
+            print(f"  Downloading JSON lines from HF...")
+            resp = requests.get(hf_url_json, stream=True, timeout=60)
+            resp.raise_for_status()
+            
+            records = []
+            with gzip.open(resp.raw, 'rt', encoding='utf-8') as f:
+                for line in f:
+                    if line.strip():
+                        records.append(json.loads(line))
+            print(f"  Loaded {len(records)} records from JSON lines.")
     
     # Iterate through records
     dataset = iter(records)
