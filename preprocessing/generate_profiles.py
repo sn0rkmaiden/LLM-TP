@@ -41,12 +41,17 @@ import json
 import pickle
 import argparse
 from pathlib import Path
+import warnings
 
 import numpy as np
 import pandas as pd
 import torch
+from tqdm import tqdm
 from transformers import pipeline as hf_pipeline
 from sentence_transformers import SentenceTransformer
+
+# Suppress verbose warnings from transformers library
+warnings.filterwarnings("ignore", message=".*max_new_tokens.*max_length.*")
 
 
 # ------------------------------------------------------------------
@@ -205,27 +210,33 @@ def main(args):
     # Storage: profile_type -> {user_id: {"text": str, "emb": np.ndarray}}
     results = {k: {} for k in PROFILE_TYPES}
 
+    print(f"\nGenerating {len(PROFILE_TYPES)} profile types (long/short/general) for {len(user_ids)} users...")
+    pbar = tqdm(total=len(user_ids) * len(PROFILE_TYPES), desc="Profile generation", unit="profiles")
+    
     for idx, uid in enumerate(user_ids):
         history_json = build_history_json(uid, user_interactions[uid], item_meta)
 
         if not json.loads(history_json):
             # User has no items with recovered metadata — skip
+            pbar.update(len(PROFILE_TYPES))
             continue
 
         for profile_type, prompt_template in prompts.items():
             full_prompt = prompt_template + "\n\nUser interactions:\n" + history_json
             profile_text = llm_call(pipe, full_prompt)
             results[profile_type][uid] = {"text": profile_text}
-
-        if (idx + 1) % 100 == 0 or (idx + 1) == len(user_ids):
-            print(f"  [{idx+1}/{len(user_ids)}] Generated profiles for user {uid}")
+            pbar.update(1)
+    
+    pbar.close()
+    print(f"\nGenerated profiles for {sum(len(v) for v in results.values()) // len(PROFILE_TYPES)} users")
 
     # --- SBERT-encode all profiles ---
-    for profile_type in PROFILE_TYPES:
+    print(f"\nSBERT-encoding {len(PROFILE_TYPES)} profile types...")
+    for i, profile_type in enumerate(PROFILE_TYPES, 1):
         uid_list   = sorted(results[profile_type].keys())
         texts      = [results[profile_type][u]["text"] for u in uid_list]
 
-        print(f"SBERT-encoding {len(texts)} {profile_type} profiles ...")
+        print(f"  [{i}/{len(PROFILE_TYPES)}] SBERT-encoding {len(texts)} {profile_type} profiles...")
         embs = sbert.encode(
             texts,
             batch_size=256,
@@ -241,7 +252,7 @@ def main(args):
         })
         text_path = DATA_DIR / f"{OUT_NAME[profile_type]}_{model_name_short}_text.pkl"
         save_pickle(text_df, str(text_path))
-        print(f"  Saved text profiles → {text_path}")
+        print(f"      ✓ Saved text profiles → {text_path.name}")
 
         # --- Save embedding pkl (drop-in replacement for original) ---
         emb_df = pd.DataFrame({
@@ -250,9 +261,9 @@ def main(args):
         })
         emb_path = DATA_DIR / f"{OUT_NAME[profile_type]}_{model_name_short}.pkl"
         save_pickle(emb_df, str(emb_path))
-        print(f"  Saved embedding profiles → {emb_path}")
+        print(f"      ✓ Saved embedding profiles → {emb_path.name}")
 
-    print("Done.")
+    print("\n✓ Done. All profiles generated and saved.")
 
 
 def parse_arguments():
