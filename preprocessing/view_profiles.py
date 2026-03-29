@@ -13,17 +13,47 @@ from pathlib import Path
 import pandas as pd
 
 
-def load_profiles(model_name: str):
-    """Load the text profiles from pickle file."""
-    data_dir = Path(__file__).resolve().parents[1] / "data" / "movies"
-    pkl_path = data_dir / f"bert_long_term_user_profiles_{model_name}_text.pkl"
+def load_profiles(model_name: str = None, file_path: str = None):
+    """Load the text profiles from pickle file.
     
-    if not pkl_path.exists():
-        print(f"❌ File not found: {pkl_path}")
-        print(f"\nAvailable files in {data_dir}:")
-        for f in sorted(data_dir.glob("bert_long_term_*_text.pkl")):
-            print(f"  - {f.name}")
-        exit(1)
+    Args:
+        model_name: Model name (e.g. 'phi-3-mini-4k-instruct'), used for glob pattern matching
+        file_path: Direct path to the profile file (overrides model_name search)
+    """
+    data_dir = Path(__file__).resolve().parents[1] / "data" / "movies"
+    
+    # If explicit file path provided, use it
+    if file_path:
+        pkl_path = Path(file_path)
+        if not pkl_path.exists():
+            print(f"❌ File not found: {pkl_path}")
+            exit(1)
+    else:
+        # Search by model name with new naming pattern (includes N and T)
+        pattern = f"bert_long_term_user_profiles_{model_name}_N*_T*_text.pkl"
+        profile_files = list(data_dir.glob(pattern))
+        
+        if profile_files:
+            # Use the most recent profile file (sorted by name)
+            pkl_path = sorted(profile_files)[-1]
+        else:
+            # Fallback: try old naming without N/T
+            pkl_path = data_dir / f"bert_long_term_user_profiles_{model_name}_text.pkl"
+            
+            if not pkl_path.exists():
+                print(f"❌ No profile files found for model '{model_name}'")
+                print(f"\nAvailable files in {data_dir}:")
+                available = sorted(data_dir.glob("bert_long_term_*_text.pkl"))
+                if available:
+                    for f in available:
+                        print(f"  - {f.name}")
+                else:
+                    print("  (none)")
+                print(f"\nUsage:")
+                print(f"  python preprocessing/view_profiles.py --model {model_name}")
+                print(f"  OR")
+                print(f"  python preprocessing/view_profiles.py --file <path/to/file.pkl>")
+                exit(1)
     
     df = pd.read_pickle(str(pkl_path))
     print(f"✓ Loaded {len(df)} profiles from {pkl_path.name}\n")
@@ -102,7 +132,13 @@ def parse_arguments():
         "--model",
         type=str,
         default="phi-3-mini-4k-instruct",
-        help="Model name (e.g. 'phi-3-mini-4k-instruct', 'Mistral-7B-Instruct-v0.1').",
+        help="Model name (e.g. 'phi-3-mini-4k-instruct', 'Mistral-7B-Instruct-v0.1'). Used to glob-search for profile files.",
+    )
+    parser.add_argument(
+        "--file",
+        type=str,
+        default=None,
+        help="Direct path to profile file (overrides --model search).",
     )
     parser.add_argument(
         "--num_samples",
@@ -127,7 +163,7 @@ def parse_arguments():
 if __name__ == "__main__":
     args = parse_arguments()
     
-    df = load_profiles(args.model)
+    df = load_profiles(model_name=args.model, file_path=args.file)
     
     if args.stats:
         show_stats(df)
