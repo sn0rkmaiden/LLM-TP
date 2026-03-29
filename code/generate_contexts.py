@@ -61,6 +61,7 @@ DEFAULT_SBERT_MODEL = "all-MiniLM-L6-v2"
 DEFAULT_LLM_MODEL = "microsoft/phi-3-mini-4k-instruct"  # Match generate_profiles.py
 CONTEXT_TEMPERATURE = 0.9   # high temperature for diverse contexts
 CONTEXT_MAX_NEW_TOKENS = 200
+PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompt" / "prompt_context.txt"
 
 
 # -------------------
