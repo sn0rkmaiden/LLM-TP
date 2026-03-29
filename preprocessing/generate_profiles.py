@@ -129,14 +129,24 @@ def build_history_json(user_id: int, interaction_rows, item_meta: dict) -> str:
 
 
 def build_llm_pipeline(model_name: str):
-    """Load a HuggingFace text-generation pipeline."""
-    print(f"Loading LLM: {model_name} (this may take a while on first run) ...")
+    """Load a HuggingFace text-generation pipeline with optimized settings."""
+    print(f"Loading LLM: {model_name} (downloading on first run) ...")
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    
+    # Check if this is a 7B+ model (slower) and recommend smaller alternative
+    if "7b" in model_name.lower() or "13b" in model_name.lower():
+        print(f"  ⚠️  Warning: {model_name} is a large model (slow inference)")
+        print(f"      For faster generation, use: microsoft/phi-3-mini-4k-instruct (3.8B)")
+    
     pipe = hf_pipeline(
         "text-generation",
         model=model_name,
         device_map="auto",
         torch_dtype=dtype,
+        model_kwargs={
+            "low_cpu_mem_usage": True,
+            "load_in_8bit": False,  # Keep in fp16 for speed
+        },
     )
     print(f"  LLM loaded on: {pipe.device}")
     return pipe
