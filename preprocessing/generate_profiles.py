@@ -153,11 +153,8 @@ def build_llm_pipeline(model_name: str):
 
 
 def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sample: bool) -> str:
-    """Run inference via pipeline and extract only the generated (new) text."""
+    """Run inference via pipeline and extract only the generated (new) text using tokenizer-based approach."""
     try:
-        # Get the length of the input to know where generation starts
-        input_len = len(prompt_text)
-        
         output = pipe(
             prompt_text,
             max_new_tokens=max_tokens,
@@ -167,15 +164,24 @@ def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sam
         
         result = output[0]["generated_text"]
         
-        # Extract only the NEW generated text (after the input prompt)
-        # The pipeline returns [prompt + generated], so we need to strip the prompt
-        if len(result) > input_len:
-            generated_only = result[input_len:].strip()
-            if generated_only:
+        # Use tokenizer to properly identify token boundary between prompt and generated text
+        tokenizer = pipe.tokenizer
+        
+        # Tokenize the full output to get token IDs
+        full_tokens = tokenizer.encode(result, add_special_tokens=True)
+        prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
+        
+        # The generated tokens are everything after the prompt
+        # This is more reliable than character-based extraction
+        if len(full_tokens) > len(prompt_tokens):
+            # Decode only the generated tokens (skip the prompt tokens)
+            generated_tokens = full_tokens[len(prompt_tokens):]
+            generated_only = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+            
+            if generated_only and len(generated_only) > 20:
                 return generated_only
         
         # Fallback: if extraction failed, return empty string (will be skipped)
-        print(f"\n  ⚠️  Warning: No generation for this prompt (got: {result[:50]}...)")
         return ""
         
     except Exception as e:
