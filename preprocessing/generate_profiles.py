@@ -153,10 +153,16 @@ def build_llm_pipeline(model_name: str):
 
 
 def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sample: bool) -> str:
-    """Run inference via pipeline and extract only the generated (new) text using tokenizer-based approach."""
+    """Run inference via pipeline and extract only the generated (new) text using marker-based extraction."""
+    # Unique marker to cleanly separate prompt from generation
+    MARKER = "\n[END_OF_PROMPT]\n"
+    
     try:
+        # Call pipeline with marker so we can reliably find where prompt ends
+        full_prompt = prompt_text + MARKER
+        
         output = pipe(
-            prompt_text,
+            full_prompt,
             max_new_tokens=max_tokens,
             do_sample=do_sample,
             temperature=temperature if do_sample else 1.0,
@@ -164,19 +170,10 @@ def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sam
         
         result = output[0]["generated_text"]
         
-        # Use tokenizer to properly identify token boundary between prompt and generated text
-        tokenizer = pipe.tokenizer
-        
-        # Tokenize the full output to get token IDs
-        full_tokens = tokenizer.encode(result, add_special_tokens=True)
-        prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
-        
-        # The generated tokens are everything after the prompt
-        # This is more reliable than character-based extraction
-        if len(full_tokens) > len(prompt_tokens):
-            # Decode only the generated tokens (skip the prompt tokens)
-            generated_tokens = full_tokens[len(prompt_tokens):]
-            generated_only = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+        # Find where the marker is and extract everything after it
+        if MARKER in result:
+            marker_pos = result.rfind(MARKER)  # Find the last occurrence
+            generated_only = result[marker_pos + len(MARKER):].strip()
             
             if generated_only and len(generated_only) > 20:
                 return generated_only
@@ -270,6 +267,7 @@ def main(args):
             continue
 
         # Generate only long-term profile
+        # Note: llm_call() internally adds a marker to separate prompt from generation
         full_prompt = prompts["long"] + "\n\nUser interactions:\n" + history_json
         profile_text = llm_call(pipe, full_prompt, max_tokens, temperature, do_sample)
         
