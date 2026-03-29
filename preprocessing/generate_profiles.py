@@ -52,13 +52,14 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import pipeline as hf_pipeline
 from sentence_transformers import SentenceTransformer
 
 # Suppress verbose warnings from transformers library
 warnings.filterwarnings("ignore", message=".*max_new_tokens.*max_length.*")
 warnings.filterwarnings("ignore", message=".*Token indices sequence length.*")
 warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*")
+warnings.filterwarnings("ignore", message=".*temperature.*not valid.*")
 
 
 # ------------------------------------------------------------------
@@ -129,7 +130,7 @@ def build_history_json(user_id: int, interaction_rows, item_meta: dict) -> str:
 
 
 def build_llm_pipeline(model_name: str):
-    """Load model and tokenizer for direct inference (faster than pipeline API)."""
+    """Load a HuggingFace text-generation pipeline."""
     print(f"Loading LLM: {model_name} (downloading on first run) ...")
     
     # Check if this is a 7B+ model (slower) and recommend smaller alternative
@@ -139,42 +140,36 @@ def build_llm_pipeline(model_name: str):
     
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
     
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=dtype,
+    # Keep it simple to avoid cache issues
+    pipe = hf_pipeline(
+        "text-generation",
+        model=model_name,
         device_map="auto",
-        trust_remote_code=True,
+        torch_dtype=dtype,
     )
     
-    # Ensure model is in eval mode and disable gradients
-    model.eval()
-    
-    print(f"  Model loaded on: {next(model.parameters()).device}")
-    return model, tokenizer
+    print(f"  LLM loaded on: {pipe.device}")
+    return pipe
 
 
-def llm_call(model, tokenizer, prompt_text: str, max_tokens: int, temperature: float, do_sample: bool) -> str:
-    """Run inference directly on model for speed (bypasses pipeline overhead)."""
-    device = next(model.parameters()).device
-    
-    # Encode prompt
-    inputs = tokenizer.encode(prompt_text, return_tensors="pt").to(device)
-    
-    # Generate
-    with torch.no_grad():
-        outputs = model.generate(
-            inputs,
+def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sample: bool) -> str:
+    """Run inference via pipeline (simple and compatible)."""
+    try:
+        output = pipe(
+            prompt_text,
             max_new_tokens=max_tokens,
-            temperature=temperature if do_sample else 1.0,
             do_sample=do_sample,
-            top_p=0.95 if do_sample else None,
-            pad_token_id=tokenizer.eos_token_id,
+            temperature=temperature if do_sample else 1.0,
         )
-    
-    # Decode (skip input tokens)
-    response = tokenizer.decode(outputs[0][inputs.shape[1]:], skip_special_tokens=True)
-    return response.strip()
+        # Extract generated text
+        result = output[0]["generated_text"]
+        # Remove the input prompt from output
+        if result.startswith(prompt_text):
+            result = result[len(prompt_text):].strip()
+        return result
+    except Exception as e:
+        print(f"\n  ⚠️  Generation error (returning empty): {str(e)[:100]}")
+        return ""
 
 
 # ------------------------------------------------------------------
@@ -236,7 +231,7 @@ def main(args):
     prompts = {k: load_prompt(v) for k, v in PROFILE_TYPES.items()}
 
     # --- Set up LLM pipeline ---
-    model, tokenizer = build_llm_pipeline(args.llm_model)
+    pipe = build_llm_pipeline(args.llm_model)
 
     # --- SBERT ---
     print(f"Loading SBERT: {SBERT_MODEL}")
@@ -259,7 +254,7 @@ def main(args):
 
         # Generate only long-term profile
         full_prompt = prompts["long"] + "\n\nUser interactions:\n" + history_json
-        profile_text = llm_call(model, tokenizer, full_prompt, max_tokens, temperature, do_sample)
+        profile_text = llm_call(pipe, full_prompt, max_tokens, temperature, do_sample)
         results["long"][uid] = {"text": profile_text}
         pbar.update(1)
     
