@@ -130,7 +130,11 @@ def build_history_json(user_id: int, interaction_rows, item_meta: dict) -> str:
 
 
 def build_llm_pipeline(model_name: str):
-    """Load a HuggingFace text-generation pipeline."""
+    """Load a HuggingFace text-generation pipeline.
+    
+    Returns:
+        tuple: (pipe, tokenizer) for use in llm_call()
+    """
     print(f"Loading LLM: {model_name} (downloading on first run) ...")
     
     # Check if this is a 7B+ model (slower) and recommend smaller alternative
@@ -149,22 +153,45 @@ def build_llm_pipeline(model_name: str):
     )
     
     print(f"  LLM loaded on: {pipe.device}")
-    return pipe
+    return pipe, pipe.tokenizer
 
 
-def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sample: bool, debug: bool = False) -> str:
-    """Run inference via pipeline and extract only the generated (new) text using chat format."""
+def llm_call(pipe, tokenizer, model_name: str, prompt_text: str, max_tokens: int, temperature: float, do_sample: bool) -> str:
+    """Run inference via pipeline and extract only the generated (new) text.
+    
+    Handles model-specific chat formats:
+    - Phi-3: Uses hardcoded <|system|>/<|user|>/<|assistant|> format
+    - Others: Uses HuggingFace's tokenizer.apply_chat_template()
+    """
     
     try:
-        # Format as proper chat for Phi-3-mini-instruct
-        full_input = (
-            "<|system|>"
-            "You are a helpful assistant that analyzes user movie preferences."
-            "<|end|>"
-            "<|user|>"
-            f"{prompt_text}"
-            "<|assistant|>"
-        )
+        # Use model-specific chat format
+        if "phi-3" in model_name.lower():
+            # Phi-3-mini-instruct hardcoded format (proven to work well)
+            full_input = (
+                "<|system|>"
+                "You are a helpful assistant that analyzes user movie preferences."
+                "<|end|>"
+                "<|user|>"
+                f"{prompt_text}"
+                "<|assistant|>"
+            )
+            assistant_marker = "<|assistant|>"
+        else:
+            # For other models: use HuggingFace's official chat template
+            try:
+                messages = [
+                    {"role": "system", "content": "You are a helpful assistant that analyzes user movie preferences."},
+                    {"role": "user", "content": prompt_text}
+                ]
+                full_input = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                # For other models, extract text after the last message marker or assumption
+                assistant_marker = None  # Will handle differently
+            except Exception as e:
+                print(f"  ⚠️  Warning: Could not apply chat template: {str(e)[:100]}")
+                print(f"     Falling back to raw prompt")
+                full_input = prompt_text
+                assistant_marker = None
         
         output = pipe(
             full_input,
@@ -175,31 +202,30 @@ def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sam
         
         result = output[0]["generated_text"]
         
-        if debug:
-            print(f"\n[DEBUG] Full output length: {len(result)}")
-            print(f"[DEBUG] First 300 chars: {result[:300]}")
-            print(f"[DEBUG] Last 300 chars: {result[-300:]}")
-        
-        # Extract text after <|assistant|>
-        assistant_marker = "<|assistant|>"
-        if assistant_marker in result:
+        # Extract generated text based on model type
+        if assistant_marker and assistant_marker in result:
+            # Phi-3: extract after <|assistant|>
             pos = result.rfind(assistant_marker)
             generated_only = result[pos + len(assistant_marker):].strip()
-            
-            # Clean up any leftover prompt artifacts
-            # Remove everything from the first occurrence of prompt keywords
-            for keyword in ["example_output:", "task:", "Objectives:", "Output Format:"]:
-                if keyword in generated_only:
-                    # Truncate at this keyword (it's leftover from the prompt)
-                    idx = generated_only.find(keyword)
-                    if idx > 0:  # Keep it if it happens to be at the start of actual content
-                        generated_only = generated_only[:idx].strip()
-            
-            if debug:
-                print(f"[DEBUG] Found assistant marker, cleaned: {generated_only[:150]}")
-            
-            if generated_only and len(generated_only) > 20:
-                return generated_only
+        else:
+            # Other models: assume input is echoed, find where generation likely starts
+            # Use input length as a rough guide
+            input_len = len(full_input)
+            if len(result) > input_len:
+                generated_only = result[input_len:].strip()
+            else:
+                # Fallback: try to find first non-whitespace after the prompt ends
+                generated_only = result
+        
+        # Clean up any leftover prompt artifacts (common across models)
+        for keyword in ["example_output:", "task:", "Objectives:", "Output Format:"]:
+            if keyword in generated_only:
+                idx = generated_only.find(keyword)
+                if idx > 0:
+                    generated_only = generated_only[:idx].strip()
+        
+        if generated_only and len(generated_only) > 20:
+            return generated_only
         
         return ""
         
@@ -267,7 +293,7 @@ def main(args):
     prompts = {k: load_prompt(v) for k, v in PROFILE_TYPES.items()}
 
     # --- Set up LLM pipeline ---
-    pipe = build_llm_pipeline(args.llm_model)
+    pipe, tokenizer = build_llm_pipeline(args.llm_model)
 
     # --- SBERT ---
     print(f"Loading SBERT: {SBERT_MODEL}")
@@ -289,14 +315,9 @@ def main(args):
             continue
 
         # Generate only long-term profile
-        # Note: llm_call() internally adds a marker to separate prompt from generation
+        # Note: llm_call() internally uses model-specific chat format
         full_prompt = prompts["long"] + "\n\nUser interactions:\n" + history_json
-        # Enable debug on first 3 users
-        debug_mode = (idx < 3)
-        profile_text = llm_call(pipe, full_prompt, max_tokens, temperature, do_sample, debug=debug_mode)
-        
-        if debug_mode:
-            print(f"[DEBUG] User {uid}: got '{profile_text[:100] if profile_text else 'EMPTY'}'")
+        profile_text = llm_call(pipe, tokenizer, llm_model, full_prompt, max_tokens, temperature, do_sample)
         
         # Skip if generation failed
         if not profile_text or len(profile_text.strip()) < 20:
