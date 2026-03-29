@@ -65,11 +65,14 @@ warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*")
 # Config
 # ------------------------------------------------------------------
 DATASET             = "movies"
-DEFAULT_LLM_MODEL  = "microsoft/phi-3-mini-4k-instruct"  # Changed to smaller model (3.8B)
+DEFAULT_LLM_MODEL  = "microsoft/phi-3-mini-4k-instruct"
 SBERT_MODEL         = "all-MiniLM-L6-v2"
-TEMPERATURE         = 0.2
-MAX_NEW_TOKENS      = 256
-MAX_HISTORY_ITEMS   = 15    # Only include most recent N items to stay under context window
+
+# Default generation parameters (can be overridden via CLI)
+DEFAULT_TEMPERATURE = 0.1    # Fast/deterministic (old: 0.2)
+DEFAULT_MAX_TOKENS  = 150    # Fast (old: 256)
+DEFAULT_SAMPLING    = False  # Greedy decoding, faster (old: True)
+MAX_HISTORY_ITEMS   = 15     # Only include most recent N items
 
 DATA_DIR      = Path(__file__).resolve().parents[1] / "data" / DATASET
 PROMPT_DIR    = Path(__file__).resolve().parents[1] / "prompt"
@@ -139,14 +142,14 @@ def build_llm_pipeline(model_name: str):
     return pipe
 
 
-def llm_call(pipe, prompt_text: str) -> str:
+def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sample: bool) -> str:
     """Run a single inference through the HF pipeline."""
     messages = [{"role": "user", "content": prompt_text}]
     output = pipe(
         messages,
-        max_new_tokens=MAX_NEW_TOKENS,
-        temperature=TEMPERATURE,
-        do_sample=True,
+        max_new_tokens=max_tokens,
+        temperature=temperature,
+        do_sample=do_sample,
     )
     # Most instruction models return the full message list; take the last assistant turn.
     generated = output[0]["generated_text"]
@@ -160,11 +163,15 @@ def llm_call(pipe, prompt_text: str) -> str:
 # ------------------------------------------------------------------
 def main(args):
     llm_model = args.llm_model
+    max_tokens = args.max_tokens
+    temperature = args.temperature
+    do_sample = args.sampling
     
-    # Extract model name for file naming (e.g., "microsoft/phi-3-mini-4k-instruct" → "phi-3-mini-4k-instruct")
+    # Extract model name for file naming
     model_name_short = llm_model.split("/")[-1] if "/" in llm_model else llm_model
     print(f"Using model: {llm_model}")
     print(f"Output files will include: {model_name_short}")
+    print(f"Generation config: max_tokens={max_tokens}, temperature={temperature:.2f}, do_sample={do_sample}")
     
     # --- Load interactions ---
     splits_to_use = (
@@ -233,7 +240,7 @@ def main(args):
 
         # Generate only long-term profile
         full_prompt = prompts["long"] + "\n\nUser interactions:\n" + history_json
-        profile_text = llm_call(pipe, full_prompt)
+        profile_text = llm_call(pipe, full_prompt, max_tokens, temperature, do_sample)
         results["long"][uid] = {"text": profile_text}
         pbar.update(1)
     
@@ -290,14 +297,30 @@ def parse_arguments():
         "--llm_model",
         type=str,
         default=DEFAULT_LLM_MODEL,
-        help="HuggingFace model ID, e.g. 'Qwen/Qwen2.5-7B-Instruct' or "
-             "'meta-llama/Llama-3.1-8B-Instruct'.",
+        help="HuggingFace model ID, e.g. 'microsoft/phi-3-mini-4k-instruct'.",
     )
     parser.add_argument(
         "--max_users",
         type=int,
         default=None,
         help="Cap the number of users processed (useful for smoke-tests).",
+    )
+    parser.add_argument(
+        "--max_tokens",
+        type=int,
+        default=DEFAULT_MAX_TOKENS,
+        help=f"Max tokens to generate per profile (default: {DEFAULT_MAX_TOKENS}, old: 256).",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=DEFAULT_TEMPERATURE,
+        help=f"Temperature for generation (default: {DEFAULT_TEMPERATURE}, old: 0.2, higher=more random).",
+    )
+    parser.add_argument(
+        "--sampling",
+        action="store_true",
+        help="Use sampling instead of greedy decoding (slower but more diverse, old behavior).",
     )
     return parser.parse_args()
 
