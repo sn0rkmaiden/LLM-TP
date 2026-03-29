@@ -142,26 +142,39 @@ def main(args):
     llm_model = args.llm_model
     sbert_model_name = args.sbert_model
     
-    # Extract model name for profile file lookup
+    # Extract model name from full ID (e.g., "microsoft/phi-3-mini-4k-instruct" → "phi-3-mini-4k-instruct")
     model_name_short = llm_model.split("/")[-1] if "/" in llm_model else llm_model
 
     data_dir = Path(__file__).resolve().parents[1] / "data" / dataset
 
-    # --- Load raw text data ---
-    # Profile files now include the model name (e.g., bert_long_term_user_profiles_phi-3-mini-4k-instruct_text.pkl)
-    user_text_path = data_dir / f"bert_long_term_user_profiles_{model_name_short}_text.pkl"
-    item_meta_path = data_dir / "item_metadata.pkl"
-    test_path = data_dir / "test.csv"
-    out_path = data_dir / "bert_context_profiles_test.pkl"
+    # --- Find user profile file (new naming: includes _N and _T) ---
+    # Look for pattern: *{model_name_short}_N*_T*_text.pkl (handles new filenames with N and T)
+    pattern = f"bert_long_term_user_profiles_{model_name_short}_N*_T*_text.pkl"
+    profile_files = list(data_dir.glob(pattern))
+    
+    if not profile_files:
+        # Fallback: try old naming without N/T (for backward compatibility)
+        old_pattern = f"bert_long_term_user_profiles_{model_name_short}_text.pkl"
+        old_file = data_dir / old_pattern
+        if old_file.exists():
+            user_text_path = old_file
+        else:
+            raise FileNotFoundError(
+                f"No profile files found matching:\n"
+                f"  {pattern}\n"
+                f"  or {old_pattern}\n"
+                f"Run: python preprocessing/generate_profiles.py --llm_model {llm_model} first"
+            )
+    else:
+        # Use the most recent profile file (sorted by name)
+        user_text_path = sorted(profile_files)[-1]
 
     print(f"Using LLM model: {llm_model}")
     print(f"Looking for user profiles: {user_text_path.name}")
     
-    if not user_text_path.exists():
-        raise FileNotFoundError(
-            f"{user_text_path} not found.\n"
-            f"Run: python preprocessing/generate_profiles.py --llm_model {llm_model} first"
-        )
+    item_meta_path = data_dir / "item_metadata.pkl"
+    test_path = data_dir / "test.csv"
+    out_path = data_dir / "bert_context_profiles_test.pkl"
 
     print("Loading raw profile texts and item metadata...")
     user_text_df = load_pickle(str(user_text_path))

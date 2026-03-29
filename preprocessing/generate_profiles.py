@@ -301,7 +301,9 @@ def main(args):
         "user_id":      uid_list,
         "profile_text": texts,
     })
-    text_path = DATA_DIR / f"{OUT_NAME['long']}_{model_name_short}_text.pkl"
+    # Include num_users and temperature in filename for tracking
+    temp_str = f"{temperature:.2f}".replace(".", "")  # e.g., 0.15 -> 015
+    text_path = DATA_DIR / f"{OUT_NAME['long']}_{model_name_short}_N{num_generated}_T{temp_str}_text.pkl"
     save_pickle(text_df, str(text_path))
     print(f"  ✓ Saved text profiles → {text_path.name}")
 
@@ -310,7 +312,7 @@ def main(args):
         "user_id": uid_list,
         "profile": list(embs),
     })
-    emb_path = DATA_DIR / f"{OUT_NAME['long']}_{model_name_short}.pkl"
+    emb_path = DATA_DIR / f"{OUT_NAME['long']}_{model_name_short}_N{num_generated}_T{temp_str}.pkl"
     save_pickle(emb_df, str(emb_path))
     print(f"  ✓ Saved embedding profiles → {emb_path.name}")
 
