@@ -152,7 +152,7 @@ def build_llm_pipeline(model_name: str):
     return pipe
 
 
-def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sample: bool) -> str:
+def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sample: bool, debug: bool = False) -> str:
     """Run inference via pipeline and extract only the generated (new) text using marker-based extraction."""
     # Unique marker to cleanly separate prompt from generation
     MARKER = "\n[END_OF_PROMPT]\n"
@@ -170,13 +170,32 @@ def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sam
         
         result = output[0]["generated_text"]
         
+        if debug:
+            print(f"\n[DEBUG] Full output length: {len(result)}")
+            print(f"[DEBUG] Marker in result: {MARKER in result}")
+            print(f"[DEBUG] First 300 chars of result: {result[:300]}")
+            print(f"[DEBUG] Last 300 chars of result: {result[-300:]}")
+        
         # Find where the marker is and extract everything after it
         if MARKER in result:
             marker_pos = result.rfind(MARKER)  # Find the last occurrence
             generated_only = result[marker_pos + len(MARKER):].strip()
             
+            if debug:
+                print(f"[DEBUG] Found marker at pos {marker_pos}, extracted: {generated_only[:100]}")
+            
             if generated_only and len(generated_only) > 20:
                 return generated_only
+        else:
+            if debug:
+                print(f"[DEBUG] Marker NOT found! Model may not be using it. Trying fallback extraction...")
+                # Fallback: assume generation is everything after the last "]\n"
+                if "]\n" in result:
+                    last_bracket = result.rfind("]\n")
+                    candidate = result[last_bracket + 2:].strip()
+                    if candidate and len(candidate) > 20:
+                        print(f"[DEBUG] Fallback extracted: {candidate[:100]}")
+                        return candidate
         
         # Fallback: if extraction failed, return empty string (will be skipped)
         return ""
@@ -269,7 +288,12 @@ def main(args):
         # Generate only long-term profile
         # Note: llm_call() internally adds a marker to separate prompt from generation
         full_prompt = prompts["long"] + "\n\nUser interactions:\n" + history_json
-        profile_text = llm_call(pipe, full_prompt, max_tokens, temperature, do_sample)
+        # Enable debug on first 3 users
+        debug_mode = (idx < 3)
+        profile_text = llm_call(pipe, full_prompt, max_tokens, temperature, do_sample, debug=debug_mode)
+        
+        if debug_mode:
+            print(f"[DEBUG] User {uid}: got '{profile_text[:100] if profile_text else 'EMPTY'}'")
         
         # Skip if generation failed
         if not profile_text or len(profile_text.strip()) < 20:
