@@ -202,7 +202,7 @@ def main(args):
     # --- Generate contexts ---
     # Build unique (user_id, item_id) pairs from the test set
     test_pairs = [
-        (int(row["user_id"]), int(row["item_id"]))
+        (int(row.user_id), int(row.item_id))
         for row in test_df.itertuples(index=False)
     ]
 
