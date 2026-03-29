@@ -71,7 +71,7 @@ SBERT_MODEL         = "all-MiniLM-L6-v2"
 
 # Default generation parameters (can be overridden via CLI)
 DEFAULT_TEMPERATURE = 0.1    # Fast/deterministic (old: 0.2)
-DEFAULT_MAX_TOKENS  = 150    # Fast (old: 256)
+DEFAULT_MAX_TOKENS  = 300    # Increased to allow complete profile generation (was 150)
 DEFAULT_SAMPLING    = False  # Greedy decoding, faster (old: True)
 MAX_HISTORY_ITEMS   = 15     # Only include most recent N items
 
@@ -186,8 +186,17 @@ def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sam
             pos = result.rfind(assistant_marker)
             generated_only = result[pos + len(assistant_marker):].strip()
             
+            # Clean up any leftover prompt artifacts
+            # Remove everything from the first occurrence of prompt keywords
+            for keyword in ["example_output:", "task:", "Objectives:", "Output Format:"]:
+                if keyword in generated_only:
+                    # Truncate at this keyword (it's leftover from the prompt)
+                    idx = generated_only.find(keyword)
+                    if idx > 0:  # Keep it if it happens to be at the start of actual content
+                        generated_only = generated_only[:idx].strip()
+            
             if debug:
-                print(f"[DEBUG] Found assistant marker, extracted: {generated_only[:150]}")
+                print(f"[DEBUG] Found assistant marker, cleaned: {generated_only[:150]}")
             
             if generated_only and len(generated_only) > 20:
                 return generated_only
