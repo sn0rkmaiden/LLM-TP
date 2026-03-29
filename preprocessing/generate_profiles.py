@@ -153,16 +153,21 @@ def build_llm_pipeline(model_name: str):
 
 
 def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sample: bool, debug: bool = False) -> str:
-    """Run inference via pipeline and extract only the generated (new) text using marker-based extraction."""
-    # Unique marker to cleanly separate prompt from generation
-    MARKER = "\n[END_OF_PROMPT]\n"
+    """Run inference via pipeline and extract only the generated (new) text using chat format."""
     
     try:
-        # Call pipeline with marker so we can reliably find where prompt ends
-        full_prompt = prompt_text + MARKER
+        # Format as proper chat for Phi-3-mini-instruct
+        full_input = (
+            "<|system|>"
+            "You are a helpful assistant that analyzes user movie preferences."
+            "<|end|>"
+            "<|user|>"
+            f"{prompt_text}"
+            "<|assistant|>"
+        )
         
         output = pipe(
-            full_prompt,
+            full_input,
             max_new_tokens=max_tokens,
             do_sample=do_sample,
             temperature=temperature if do_sample else 1.0,
@@ -172,32 +177,21 @@ def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sam
         
         if debug:
             print(f"\n[DEBUG] Full output length: {len(result)}")
-            print(f"[DEBUG] Marker in result: {MARKER in result}")
-            print(f"[DEBUG] First 300 chars of result: {result[:300]}")
-            print(f"[DEBUG] Last 300 chars of result: {result[-300:]}")
+            print(f"[DEBUG] First 300 chars: {result[:300]}")
+            print(f"[DEBUG] Last 300 chars: {result[-300:]}")
         
-        # Find where the marker is and extract everything after it
-        if MARKER in result:
-            marker_pos = result.rfind(MARKER)  # Find the last occurrence
-            generated_only = result[marker_pos + len(MARKER):].strip()
+        # Extract text after <|assistant|>
+        assistant_marker = "<|assistant|>"
+        if assistant_marker in result:
+            pos = result.rfind(assistant_marker)
+            generated_only = result[pos + len(assistant_marker):].strip()
             
             if debug:
-                print(f"[DEBUG] Found marker at pos {marker_pos}, extracted: {generated_only[:100]}")
+                print(f"[DEBUG] Found assistant marker, extracted: {generated_only[:150]}")
             
             if generated_only and len(generated_only) > 20:
                 return generated_only
-        else:
-            if debug:
-                print(f"[DEBUG] Marker NOT found! Model may not be using it. Trying fallback extraction...")
-                # Fallback: assume generation is everything after the last "]\n"
-                if "]\n" in result:
-                    last_bracket = result.rfind("]\n")
-                    candidate = result[last_bracket + 2:].strip()
-                    if candidate and len(candidate) > 20:
-                        print(f"[DEBUG] Fallback extracted: {candidate[:100]}")
-                        return candidate
         
-        # Fallback: if extraction failed, return empty string (will be skipped)
         return ""
         
     except Exception as e:
