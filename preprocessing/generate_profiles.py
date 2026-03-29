@@ -153,22 +153,33 @@ def build_llm_pipeline(model_name: str):
 
 
 def llm_call(pipe, prompt_text: str, max_tokens: int, temperature: float, do_sample: bool) -> str:
-    """Run inference via pipeline (simple and compatible)."""
+    """Run inference via pipeline and extract only the generated (new) text."""
     try:
+        # Get the length of the input to know where generation starts
+        input_len = len(prompt_text)
+        
         output = pipe(
             prompt_text,
             max_new_tokens=max_tokens,
             do_sample=do_sample,
             temperature=temperature if do_sample else 1.0,
         )
-        # Extract generated text
+        
         result = output[0]["generated_text"]
-        # Remove the input prompt from output
-        if result.startswith(prompt_text):
-            result = result[len(prompt_text):].strip()
-        return result
+        
+        # Extract only the NEW generated text (after the input prompt)
+        # The pipeline returns [prompt + generated], so we need to strip the prompt
+        if len(result) > input_len:
+            generated_only = result[input_len:].strip()
+            if generated_only:
+                return generated_only
+        
+        # Fallback: if extraction failed, return empty string (will be skipped)
+        print(f"\n  ⚠️  Warning: No generation for this prompt (got: {result[:50]}...)")
+        return ""
+        
     except Exception as e:
-        print(f"\n  ⚠️  Generation error (returning empty): {str(e)[:100]}")
+        print(f"\n  ⚠️  Generation error: {str(e)[:100]}")
         return ""
 
 
@@ -255,12 +266,22 @@ def main(args):
         # Generate only long-term profile
         full_prompt = prompts["long"] + "\n\nUser interactions:\n" + history_json
         profile_text = llm_call(pipe, full_prompt, max_tokens, temperature, do_sample)
+        
+        # Skip if generation failed
+        if not profile_text or len(profile_text.strip()) < 20:
+            pbar.update(1)
+            continue
+        
         results["long"][uid] = {"text": profile_text}
         pbar.update(1)
     
     pbar.close()
     num_generated = len(results["long"])
     print(f"\nGenerated long-term profiles for {num_generated} users")
+    
+    if num_generated == 0:
+        print("❌ ERROR: No profiles were generated. Check the LLM output above.")
+        exit(1)
 
     # --- SBERT-encode ---
     print(f"\nSBERT-encoding {num_generated} long-term profiles...")
