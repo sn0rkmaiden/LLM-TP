@@ -143,35 +143,58 @@ def main(args):
     llm_model = args.llm_model
     sbert_model_name = args.sbert_model
     
+    # Verify profile_file argument is passed through
+    if not hasattr(args, 'profile_file'):
+        args.profile_file = None
+    
     # Extract model name from full ID (e.g., "microsoft/phi-3-mini-4k-instruct" → "phi-3-mini-4k-instruct")
     model_name_short = llm_model.split("/")[-1] if "/" in llm_model else llm_model
 
     data_dir = Path(__file__).resolve().parents[1] / "data" / dataset
 
-    # --- Find user profile file (new naming: includes _N and _T) ---
-    # Look for pattern: *{model_name_short}_N*_T*_text.pkl (handles new filenames with N and T)
-    pattern = f"bert_long_term_user_profiles_{model_name_short}_N*_T*_text.pkl"
-    profile_files = list(data_dir.glob(pattern))
-    
-    if not profile_files:
-        # Fallback: try old naming without N/T (for backward compatibility)
-        old_pattern = f"bert_long_term_user_profiles_{model_name_short}_text.pkl"
-        old_file = data_dir / old_pattern
-        if old_file.exists():
-            user_text_path = old_file
+    # --- Find user profile file ---
+    if args.profile_file:
+        # User specified explicit profile file
+        profile_path = Path(args.profile_file)
+        
+        # If it's just a filename (no directory), assume it's in data_dir
+        if not profile_path.is_absolute() and "/" not in str(profile_path) and "\\" not in str(profile_path):
+            user_text_path = data_dir / profile_path
         else:
+            user_text_path = profile_path
+        
+        if not user_text_path.exists():
             raise FileNotFoundError(
-                f"No profile files found matching:\n"
-                f"  {pattern}\n"
-                f"  or {old_pattern}\n"
-                f"Run: python preprocessing/generate_profiles.py --llm_model {llm_model} first"
+                f"Profile file not found: {user_text_path}\n"
+                f"Checked: {user_text_path.resolve()}"
             )
     else:
-        # Use the most recent profile file (sorted by name)
-        user_text_path = sorted(profile_files)[-1]
+        # Auto-detect: Look for pattern: *{model_name_short}_N*_T*_text.pkl (handles new filenames with N and T)
+        pattern = f"bert_long_term_user_profiles_{model_name_short}_N*_T*_text.pkl"
+        profile_files = list(data_dir.glob(pattern))
+        
+        if not profile_files:
+            # Fallback: try old naming without N/T (for backward compatibility)
+            old_pattern = f"bert_long_term_user_profiles_{model_name_short}_text.pkl"
+            old_file = data_dir / old_pattern
+            if old_file.exists():
+                user_text_path = old_file
+            else:
+                raise FileNotFoundError(
+                    f"No profile files found matching:\n"
+                    f"  {pattern}\n"
+                    f"  or {old_pattern}\n"
+                    f"Run: python preprocessing/generate_profiles.py --llm_model {llm_model} first"
+                )
+        else:
+            # Use the most recent profile file (sorted by name)
+            user_text_path = sorted(profile_files)[-1]
 
     print(f"Using LLM model: {llm_model}")
-    print(f"Looking for user profiles: {user_text_path.name}")
+    if args.profile_file:
+        print(f"Using specified profile file: {user_text_path.name}")
+    else:
+        print(f"Auto-detected profile file: {user_text_path.name}")
     
     item_meta_path = data_dir / "item_metadata.pkl"
     test_path = data_dir / "test.csv"
@@ -250,6 +273,8 @@ def parse_arguments():
                         help="Sentence-Transformers model name for encoding contexts.")
     parser.add_argument("--seed", type=int, default=None,
                         help="Seed (for reproducibility notes only; LLM calls are stochastic).")
+    parser.add_argument("--profile_file", type=str, default=None,
+                        help="Path to profile file (filename or full path). If not specified, auto-detects based on --llm_model.")
     return parser.parse_args()
 
 
