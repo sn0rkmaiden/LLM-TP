@@ -46,6 +46,7 @@ import argparse
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from tqdm import tqdm
 
 import torch
 from transformers import pipeline as hf_pipeline
@@ -244,10 +245,15 @@ def main(args):
     # Collect all contexts and metadata for batch SBERT encoding
     all_ctx_texts = []        # List of context strings
     all_ctx_metadata = []      # List of (user_id, item_id, context_idx) tuples
+    
+    pbar = tqdm(total=total, desc="Generating contexts", unit="pairs")
+    
     for idx, (user_id, item_id) in enumerate(test_pairs):
         if user_id not in user_text:
+            pbar.update(1)
             continue
         if item_id not in item_meta:
+            pbar.update(1)
             continue
 
         user_desc = user_text[user_id]
@@ -262,9 +268,10 @@ def main(args):
         for ctx_idx, ctx_text in enumerate(ctx_texts):
             all_ctx_texts.append(ctx_text)
             all_ctx_metadata.append((user_id, item_id, ctx_idx))
-
-        if (idx + 1) % 50 == 0 or (idx + 1) == total:
-            print(f"  [{idx+1}/{total}] Generated contexts, collected for batch encoding...")
+        
+        pbar.update(1)
+    
+    pbar.close()
     
     # Batch-encode all contexts at once (much faster than per-pair encoding)
     print(f"\nBatch-encoding {len(all_ctx_texts)} contexts with SBERT...")
