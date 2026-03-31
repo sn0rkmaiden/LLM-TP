@@ -146,6 +146,8 @@ def main(args):
     # Verify profile_file argument is passed through
     if not hasattr(args, 'profile_file'):
         args.profile_file = None
+    if not hasattr(args, 'max_pairs'):
+        args.max_pairs = None
     
     # Extract model name from full ID (e.g., "microsoft/phi-3-mini-4k-instruct" → "phi-3-mini-4k-instruct")
     model_name_short = llm_model.split("/")[-1] if "/" in llm_model else llm_model
@@ -231,14 +233,21 @@ def main(args):
 
     context_dict = {}   # {(user_id, item_id): List[np.ndarray shape (384,)]}
     total = len(test_pairs)
-
+    
+    # Optionally limit to first N pairs for testing
+    if args.max_pairs:
+        test_pairs = test_pairs[:args.max_pairs]
+        total = len(test_pairs)
+    
     print(f"Generating {num_contexts} contexts for {total} test (user, item) pairs...")
+    
+    # Collect all contexts and metadata for batch SBERT encoding
+    all_ctx_texts = []        # List of context strings
+    all_ctx_metadata = []      # List of (user_id, item_id, context_idx) tuples
     for idx, (user_id, item_id) in enumerate(test_pairs):
         if user_id not in user_text:
-            print(f"  [{idx+1}/{total}] Skipping user {user_id}: no profile text found.")
             continue
         if item_id not in item_meta:
-            print(f"  [{idx+1}/{total}] Skipping item {item_id}: no metadata found.")
             continue
 
         user_desc = user_text[user_id]
@@ -248,13 +257,30 @@ def main(args):
         prompt_text = build_prompt(prompt_template, user_desc, item_title, item_desc)
 
         ctx_texts = generate_contexts_for_pair(pipe, prompt_text, num_contexts)
-
-        # SBERT-encode all K contexts
-        ctx_embs = sbert.encode(ctx_texts, convert_to_numpy=True)  # shape (K, 384)
-        context_dict[(user_id, item_id)] = [ctx_embs[k] for k in range(len(ctx_texts))]
+        
+        # Collect contexts and their metadata for batch encoding later
+        for ctx_idx, ctx_text in enumerate(ctx_texts):
+            all_ctx_texts.append(ctx_text)
+            all_ctx_metadata.append((user_id, item_id, ctx_idx))
 
         if (idx + 1) % 50 == 0 or (idx + 1) == total:
-            print(f"  [{idx+1}/{total}] Processed user {user_id}, item {item_id}.")
+            print(f"  [{idx+1}/{total}] Generated contexts, collected for batch encoding...")
+    
+    # Batch-encode all contexts at once (much faster than per-pair encoding)
+    print(f"\nBatch-encoding {len(all_ctx_texts)} contexts with SBERT...")
+    if all_ctx_texts:
+        all_ctx_embs = sbert.encode(
+            all_ctx_texts,
+            batch_size=256,
+            convert_to_numpy=True,
+            show_progress_bar=True,
+        )  # shape (N_contexts, 384)
+        
+        # Reorganize embeddings back into the context_dict structure
+        for (user_id, item_id, ctx_idx), emb in zip(all_ctx_metadata, all_ctx_embs):
+            if (user_id, item_id) not in context_dict:
+                context_dict[(user_id, item_id)] = []
+            context_dict[(user_id, item_id)].append(emb)
 
     save_pickle(context_dict, str(out_path))
     print(f"Done. Generated contexts for {len(context_dict)} / {total} pairs.")
@@ -275,6 +301,8 @@ def parse_arguments():
                         help="Seed (for reproducibility notes only; LLM calls are stochastic).")
     parser.add_argument("--profile_file", type=str, default=None,
                         help="Path to profile file (filename or full path). If not specified, auto-detects based on --llm_model.")
+    parser.add_argument("--max_pairs", type=int, default=None,
+                        help="Limit to first N test pairs (useful for quick testing; default: all).")
     return parser.parse_args()
 
 
