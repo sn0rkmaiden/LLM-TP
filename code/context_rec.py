@@ -3,6 +3,7 @@ import time
 import random
 import pickle
 import json
+import re
 import numpy as np
 import pandas as pd
 import argparse
@@ -101,12 +102,13 @@ def save_run_results_json(
     ranking_results_context_avg,
     ranking_results_context_best,
     execution_time_sec,
+    profile_tag,
 ):
     results_dir = Path(__file__).resolve().parent / "results"
     results_dir.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_seed = "none" if seed is None else str(seed)
-    json_path = results_dir / f"{Path(script_name).stem}_{dataset}_seed{safe_seed}_{timestamp}.json"
+    json_path = results_dir / f"{Path(script_name).stem}_{dataset}_{profile_tag}_seed{safe_seed}_{timestamp}.json"
 
     payload = {
         "script_name": script_name,
@@ -114,6 +116,7 @@ def save_run_results_json(
         "dataset": dataset,
         "seed": seed,
         "timestamp": timestamp,
+        "profile_tag": profile_tag,
         "checkpoint_path": str(checkpoint_path),
         "config": {
             "ITEM_EMBEDDINGS_PATH": cfg.ITEM_EMBEDDINGS_PATH,
@@ -184,6 +187,43 @@ def resolve_user_profile_embedding_file(data_dir: Path, model_name_short: str) -
         f"  bert_long_term_user_profiles_{model_name_short}_N*_T*.pkl\n"
         f"Run: python preprocessing/generate_profiles.py --llm_model <model>"
     )
+
+
+
+
+def resolve_requested_or_latest_user_profile_embedding_file(
+    data_dir: Path,
+    model_name_short: str,
+    explicit_path: str | None,
+) -> str:
+    if explicit_path:
+        candidate = Path(explicit_path)
+        if not candidate.is_absolute():
+            candidate = (data_dir / explicit_path).resolve()
+        if not candidate.exists():
+            raise FileNotFoundError(f"Requested user profile embedding file not found: {explicit_path}")
+        if candidate.name.endswith("_text.pkl"):
+            raise ValueError(
+                "--user_profile_file must point to the embedding pickle, not the *_text.pkl file. "
+                f"Got: {candidate.name}"
+            )
+        return str(candidate)
+
+    return resolve_user_profile_embedding_file(data_dir, model_name_short)
+
+
+def extract_profile_tag(profile_path: str) -> str:
+    name = Path(profile_path).name
+    match = re.search(r"_N(\d+)_T(\d+)(?:\.pkl)$", name)
+    if match:
+        return f"N{match.group(1)}_T{match.group(2)}"
+
+    stem = Path(profile_path).stem
+    prefix = "bert_long_term_user_profiles_"
+    if stem.startswith(prefix):
+        stem = stem[len(prefix):]
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-_")
+    return stem or "profile"
 
 
 def print_split_coverage(split_name, df, available_users, available_items):
@@ -827,6 +867,7 @@ def main(seed, llm_model="microsoft/phi-3-mini-4k-instruct"):
         ranking_ctx_avg,
         ranking_ctx_best,
         time.time() - run_start_time,
+        profile_tag,
     )
     print("Done.")
 
@@ -842,6 +883,15 @@ def parse_arguments():
         default="microsoft/phi-3-mini-4k-instruct",
         help="LLM model used to generate profiles (e.g. 'microsoft/phi-3-mini-4k-instruct')",
     )
+    parser.add_argument(
+        "--user_profile_file",
+        type=str,
+        default=None,
+        help=(
+            "Embedding pickle to use for long-term user descriptions, either absolute or relative to data/<dataset>. "
+            "Example: bert_long_term_user_profiles_phi-3-mini-4k-instruct_N5000_T015.pkl"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -849,5 +899,5 @@ if __name__ == "__main__":
     print(f"ContextRec-{DATASET}")
     args = parse_arguments()
     set_seed(args.seed)
-    main(args.seed, args.llm_model)
+    main(args.seed, args.llm_model, args.user_profile_file)
     print(f"ContextRec-{DATASET} Done")
