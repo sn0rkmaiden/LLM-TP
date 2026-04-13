@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -24,8 +24,6 @@ from transformers import AutoModel, AutoTokenizer
 
 SCRIPT_NAME = "train_contextrec_scenario1.py"
 METHOD_NAME = "ContextRecScenario1"
-
-CaseKey = Tuple[int, int, int]
 
 
 @dataclass
@@ -172,6 +170,30 @@ class Scenario1PairDataset(Dataset):
         return samples
 
 
+class RankingEarlyStopping:
+    def __init__(self, patience: int, checkpoint_path: str, delta: float = 1e-6):
+        self.patience = patience
+        self.checkpoint_path = checkpoint_path
+        self.delta = delta
+        self.counter = 0
+        self.best_metric = None
+        self.best_epoch = None
+        self.early_stop = False
+
+    def __call__(self, metric_value: float, epoch: int, model: nn.Module):
+        if self.best_metric is None or metric_value > self.best_metric + self.delta:
+            self.best_metric = metric_value
+            self.best_epoch = epoch
+            self.counter = 0
+            torch.save(model.state_dict(), self.checkpoint_path)
+            return True
+        self.counter += 1
+        print(f"EarlyStopping counter: {self.counter} out of {self.patience}")
+        if self.counter >= self.patience:
+            self.early_stop = True
+        return False
+
+
 def set_seed(seed: Optional[int]):
     if seed is None:
         return
@@ -283,30 +305,6 @@ def evaluate_pairs(model, loader, criterion, device):
     return total_loss / n, total_acc / n
 
 
-class RankingEarlyStopping:
-    def __init__(self, patience: int, checkpoint_path: str, delta: float = 1e-6):
-        self.patience = patience
-        self.checkpoint_path = checkpoint_path
-        self.delta = delta
-        self.counter = 0
-        self.best_score = None
-        self.best_epoch = None
-        self.early_stop = False
-
-    def __call__(self, metric_value: float, model: nn.Module, epoch: int):
-        if self.best_score is None or metric_value > self.best_score + self.delta:
-            self.best_score = metric_value
-            self.best_epoch = epoch
-            self.counter = 0
-            torch.save(model.state_dict(), self.checkpoint_path)
-            print(f"Saved new best checkpoint at epoch {epoch} (val_ndcg@10={metric_value:.4f})")
-            return
-        self.counter += 1
-        print(f"EarlyStopping counter: {self.counter} out of {self.patience} (best val_ndcg@10={self.best_score:.4f})")
-        if self.counter >= self.patience:
-            self.early_stop = True
-
-
 def rank_of_item(ranked_items: Sequence[int], target_item: int) -> int:
     return ranked_items.index(target_item) + 1
 
@@ -317,15 +315,19 @@ def build_hit_metrics(df: pd.DataFrame, rank_col: str, ks=(1, 3, 5, 10)) -> Dict
     return {f"hit@{k}": float((df[rank_col] <= k).mean()) for k in ks}
 
 
+def ndcg_at_k_from_rank(rank: int, k: int) -> float:
+    if rank <= 0 or rank > k:
+        return 0.0
+    return 1.0 / math.log2(rank + 1)
+
+
 def build_ndcg_metrics(df: pd.DataFrame, rank_col: str, ks=(1, 3, 5, 10)) -> Dict[str, float]:
     if df.empty:
         return {f"ndcg@{k}": 0.0 for k in ks}
-    metrics = {}
-    ranks = df[rank_col].to_numpy()
-    for k in ks:
-        gains = np.where(ranks <= k, 1.0 / np.log2(ranks + 1.0), 0.0)
-        metrics[f"ndcg@{k}"] = float(np.mean(gains))
-    return metrics
+    return {
+        f"ndcg@{k}": float(df[rank_col].map(lambda r: ndcg_at_k_from_rank(int(r), k)).mean())
+        for k in ks
+    }
 
 
 def summarize_rank_report(df: pd.DataFrame, before_col: str, after_col: str) -> Dict[str, float]:
@@ -515,13 +517,19 @@ def parse_args():
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--patience", type=int, default=2)
-    parser.add_argument("--early_stop_metric", type=str, default="ndcg@10", choices=["ndcg@10"],
-                        help="Validation reranking metric used for checkpointing and early stopping.")
     parser.add_argument("--train_frac", type=float, default=0.70)
     parser.add_argument("--val_frac", type=float, default=0.15)
     parser.add_argument("--max_cases", type=int, default=None)
     parser.add_argument("--save_case_report", action="store_true")
     return parser.parse_args()
+
+
+def print_rerank_snapshot(prefix: str, summary: Dict[str, float]):
+    print(
+        f"{prefix}: avg rank {summary['avg_rank_before']:.2f} -> {summary['avg_rank_after']:.2f} "
+        f"| NDCG@10 {summary['before_ndcg@10']:.4f} -> {summary['after_ndcg@10']:.4f} "
+        f"| Hit@10 {summary['before_hit@10']:.4f} -> {summary['after_hit@10']:.4f}"
+    )
 
 
 def main():
@@ -585,9 +593,7 @@ def main():
         raise RuntimeError("Need at least 3 encoded cases to build train/val/test splits.")
 
     train_cases, val_cases, test_cases = split_cases(encoded_cases, seed=args.seed, train_frac=args.train_frac, val_frac=args.val_frac)
-    print(
-        f"Split by original_user_id -> train={len(train_cases)} val={len(val_cases)} test={len(test_cases)}"
-    )
+    print(f"Split by original_user_id -> train={len(train_cases)} val={len(val_cases)} test={len(test_cases)}")
     if not train_cases or not val_cases or not test_cases:
         raise RuntimeError("One of the splits is empty. Try lowering train_frac/val_frac or use more cases.")
 
@@ -612,13 +618,22 @@ def main():
     checkpoint_path = script_dir / f"best_contextrec_scenario1_seed{args.seed}_{timestamp}.pt"
     stopper = RankingEarlyStopping(patience=args.patience, checkpoint_path=str(checkpoint_path))
 
+    # Diagnostic random-init reranking before any training.
+    random_val_report = evaluate_reranking(model, val_cases, item_dict, device)
+    random_val_summary = summarize_rank_report(random_val_report, "sasrec_candidate_rank", "contextrec_rank")
+    print_rerank_snapshot("Random-init validation reranking", random_val_summary)
+
+    random_test_report = evaluate_reranking(model, test_cases, item_dict, device)
+    random_test_summary = summarize_rank_report(random_test_report, "sasrec_candidate_rank", "contextrec_rank")
+    print_rerank_snapshot("Random-init test reranking", random_test_summary)
+
     train_history = []
     for epoch in range(1, args.epochs + 1):
         train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device)
         val_loss, val_acc = evaluate_pairs(model, val_loader, criterion, device)
-        val_report = evaluate_reranking(model, val_cases, item_dict, device)
-        val_rerank = summarize_rank_report(val_report, "sasrec_candidate_rank", "contextrec_rank")
-        val_ndcg10 = val_rerank["after_ndcg@10"]
+        val_rerank_report = evaluate_reranking(model, val_cases, item_dict, device)
+        val_rerank_summary = summarize_rank_report(val_rerank_report, "sasrec_candidate_rank", "contextrec_rank")
+        val_ndcg10 = val_rerank_summary["after_ndcg@10"]
         train_history.append(
             {
                 "epoch": epoch,
@@ -626,27 +641,24 @@ def main():
                 "train_acc": train_acc,
                 "val_loss": val_loss,
                 "val_acc": val_acc,
-                "val_rerank": val_rerank,
+                "val_rerank": val_rerank_summary,
                 "val_ndcg@10": val_ndcg10,
             }
         )
         print(
             f"Epoch [{epoch}/{args.epochs}] train_loss={train_loss:.4f} train_acc={train_acc:.4f} "
             f"val_loss={val_loss:.4f} val_acc={val_acc:.4f} "
-            f"val_ndcg@10={val_ndcg10:.4f} val_avg_rank={val_rerank['avg_rank_after']:.2f}"
+            f"val_ndcg@10={val_ndcg10:.4f} val_avg_rank={val_rerank_summary['avg_rank_after']:.2f}"
         )
-        stopper(val_ndcg10, model, epoch)
+        stopper(val_ndcg10, epoch, model)
         if stopper.early_stop:
-            print("Early stopping triggered on validation NDCG@10.")
+            print("Early stopping triggered.")
             break
 
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     test_report = evaluate_reranking(model, test_cases, item_dict, device)
     rerank_summary = summarize_rank_report(test_report, "sasrec_candidate_rank", "contextrec_rank")
-    print(
-        f"Scenario 1 reranking: avg rank {rerank_summary['avg_rank_before']:.2f} -> "
-        f"{rerank_summary['avg_rank_after']:.2f} (avg delta {rerank_summary['avg_delta']:.2f})"
-    )
+    print_rerank_snapshot("Scenario 1 test reranking", rerank_summary)
 
     case_report_path = None
     if args.save_case_report:
@@ -674,9 +686,11 @@ def main():
         "num_val_cases": len(val_cases),
         "num_test_cases": len(test_cases),
         "neg_per_case": args.neg_per_case,
-        "early_stop_metric": args.early_stop_metric,
-        "best_val_ndcg@10": stopper.best_score,
+        "early_stop_metric": "ndcg@10",
+        "best_val_ndcg@10": stopper.best_metric,
         "best_epoch": stopper.best_epoch,
+        "random_init_val_rerank": random_val_summary,
+        "random_init_test_rerank": random_test_summary,
         "train_history": train_history,
         "test_rerank": rerank_summary,
         "execution_time_sec": time.time() - t0,
