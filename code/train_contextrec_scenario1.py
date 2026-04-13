@@ -283,26 +283,26 @@ def evaluate_pairs(model, loader, criterion, device):
     return total_loss / n, total_acc / n
 
 
-class EarlyStopping:
-    def __init__(self, patience: int, checkpoint_path: str, delta: float = 1e-4):
+class RankingEarlyStopping:
+    def __init__(self, patience: int, checkpoint_path: str, delta: float = 1e-6):
         self.patience = patience
         self.checkpoint_path = checkpoint_path
         self.delta = delta
         self.counter = 0
         self.best_score = None
-        self.best_val_loss = math.inf
+        self.best_epoch = None
         self.early_stop = False
 
-    def __call__(self, val_loss: float, model: nn.Module):
-        score = -val_loss
-        if self.best_score is None or score > self.best_score + self.delta:
-            self.best_score = score
-            self.best_val_loss = val_loss
+    def __call__(self, metric_value: float, model: nn.Module, epoch: int):
+        if self.best_score is None or metric_value > self.best_score + self.delta:
+            self.best_score = metric_value
+            self.best_epoch = epoch
             self.counter = 0
             torch.save(model.state_dict(), self.checkpoint_path)
+            print(f"Saved new best checkpoint at epoch {epoch} (val_ndcg@10={metric_value:.4f})")
             return
         self.counter += 1
-        print(f"EarlyStopping counter: {self.counter} out of {self.patience}")
+        print(f"EarlyStopping counter: {self.counter} out of {self.patience} (best val_ndcg@10={self.best_score:.4f})")
         if self.counter >= self.patience:
             self.early_stop = True
 
@@ -317,6 +317,17 @@ def build_hit_metrics(df: pd.DataFrame, rank_col: str, ks=(1, 3, 5, 10)) -> Dict
     return {f"hit@{k}": float((df[rank_col] <= k).mean()) for k in ks}
 
 
+def build_ndcg_metrics(df: pd.DataFrame, rank_col: str, ks=(1, 3, 5, 10)) -> Dict[str, float]:
+    if df.empty:
+        return {f"ndcg@{k}": 0.0 for k in ks}
+    metrics = {}
+    ranks = df[rank_col].to_numpy()
+    for k in ks:
+        gains = np.where(ranks <= k, 1.0 / np.log2(ranks + 1.0), 0.0)
+        metrics[f"ndcg@{k}"] = float(np.mean(gains))
+    return metrics
+
+
 def summarize_rank_report(df: pd.DataFrame, before_col: str, after_col: str) -> Dict[str, float]:
     if df.empty:
         return {
@@ -329,6 +340,8 @@ def summarize_rank_report(df: pd.DataFrame, before_col: str, after_col: str) -> 
             "worsened_count": 0,
             **{f"before_hit@{k}": 0.0 for k in (1, 3, 5, 10)},
             **{f"after_hit@{k}": 0.0 for k in (1, 3, 5, 10)},
+            **{f"before_ndcg@{k}": 0.0 for k in (1, 3, 5, 10)},
+            **{f"after_ndcg@{k}": 0.0 for k in (1, 3, 5, 10)},
         }
     delta = df[before_col] - df[after_col]
     summary = {
@@ -342,6 +355,8 @@ def summarize_rank_report(df: pd.DataFrame, before_col: str, after_col: str) -> 
     }
     summary.update({f"before_{k}": v for k, v in build_hit_metrics(df, before_col).items()})
     summary.update({f"after_{k}": v for k, v in build_hit_metrics(df, after_col).items()})
+    summary.update({f"before_{k}": v for k, v in build_ndcg_metrics(df, before_col).items()})
+    summary.update({f"after_{k}": v for k, v in build_ndcg_metrics(df, after_col).items()})
     return summary
 
 
@@ -499,7 +514,9 @@ def parse_args():
     parser.add_argument("--weight_decay", type=float, default=1e-5)
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--hidden_dim", type=int, default=128)
-    parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--patience", type=int, default=2)
+    parser.add_argument("--early_stop_metric", type=str, default="ndcg@10", choices=["ndcg@10"],
+                        help="Validation reranking metric used for checkpointing and early stopping.")
     parser.add_argument("--train_frac", type=float, default=0.70)
     parser.add_argument("--val_frac", type=float, default=0.15)
     parser.add_argument("--max_cases", type=int, default=None)
@@ -593,12 +610,15 @@ def main():
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     checkpoint_path = script_dir / f"best_contextrec_scenario1_seed{args.seed}_{timestamp}.pt"
-    stopper = EarlyStopping(patience=args.patience, checkpoint_path=str(checkpoint_path))
+    stopper = RankingEarlyStopping(patience=args.patience, checkpoint_path=str(checkpoint_path))
 
     train_history = []
     for epoch in range(1, args.epochs + 1):
         train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device)
         val_loss, val_acc = evaluate_pairs(model, val_loader, criterion, device)
+        val_report = evaluate_reranking(model, val_cases, item_dict, device)
+        val_rerank = summarize_rank_report(val_report, "sasrec_candidate_rank", "contextrec_rank")
+        val_ndcg10 = val_rerank["after_ndcg@10"]
         train_history.append(
             {
                 "epoch": epoch,
@@ -606,15 +626,18 @@ def main():
                 "train_acc": train_acc,
                 "val_loss": val_loss,
                 "val_acc": val_acc,
+                "val_rerank": val_rerank,
+                "val_ndcg@10": val_ndcg10,
             }
         )
         print(
             f"Epoch [{epoch}/{args.epochs}] train_loss={train_loss:.4f} train_acc={train_acc:.4f} "
-            f"val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
+            f"val_loss={val_loss:.4f} val_acc={val_acc:.4f} "
+            f"val_ndcg@10={val_ndcg10:.4f} val_avg_rank={val_rerank['avg_rank_after']:.2f}"
         )
-        stopper(val_loss, model)
+        stopper(val_ndcg10, model, epoch)
         if stopper.early_stop:
-            print("Early stopping triggered.")
+            print("Early stopping triggered on validation NDCG@10.")
             break
 
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
@@ -651,6 +674,9 @@ def main():
         "num_val_cases": len(val_cases),
         "num_test_cases": len(test_cases),
         "neg_per_case": args.neg_per_case,
+        "early_stop_metric": args.early_stop_metric,
+        "best_val_ndcg@10": stopper.best_score,
+        "best_epoch": stopper.best_epoch,
         "train_history": train_history,
         "test_rerank": rerank_summary,
         "execution_time_sec": time.time() - t0,
